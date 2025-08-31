@@ -1,0 +1,33 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "qiskit_gym"
+requires-python = ">=3.11"
+version = "0.1.0"
+description = "A collection of quantum information science problems formulated as reinforcement learning environments"
+authors = [{ name = "David Kremer" }]
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+dependencies = [
+  "qiskit>=2.1",
+  "gymnasium",
+  "twisterl",
+]
+
+
+[tool.setuptools]
+packages = ["qiskit_gym"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+profile = "release"
+module-name = "qiskit_gym.qiskit_gym_rs"
+
+[linkedProjects]

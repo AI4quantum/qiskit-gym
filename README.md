@@ -1,2 +1,3 @@
 # qiskit-gym
-A collection of quantum information science problems formulated as reinforcement learning environments
+
+A collection of quantum information science problems formulated as reinforcement learning environments.

@@ -1,0 +1,120 @@
+{
+  "env_cls": "qiskit_gym.envs.synthesis.CliffordEnv",
+  "env": {
+    "num_qubits": 3,
+    "difficulty": 1,
+    "gateset": [
+      [
+        "CX",
+        [
+          0,
+          1
+        ]
+      ],
+      [
+        "CX",
+        [
+          1,
+          0
+        ]
+      ],
+      [
+        "CX",
+        [
+          1,
+          2
+        ]
+      ],
+      [
+        "CX",
+        [
+          2,
+          1
+        ]
+      ],
+      [
+        "SWAP",
+        [
+          0,
+          1
+        ]
+      ],
+      [
+        "SWAP",
+        [
+          1,
+          2
+        ]
+      ],
+      [
+        "H",
+        [
+          0
+        ]
+      ],
+      [
+        "S",
+        [
+          0
+        ]
+      ]
+    ],
+    "depth_slope": 2,
+    "max_depth": 128
+  },
+  "policy_cls": "twisterl.nn.BasicPolicy",
+  "policy": {
+    "embedding_size": 512,
+    "common_layers": [
+      256
+    ],
+    "policy_layers": [],
+    "value_layers": []
+  },
+  "algorithm_cls": "twisterl.rl.PPO",
+  "algorithm": {
+    "collecting": {
+      "num_cores": 32,
+      "num_episodes": 1024,
+      "lambda": 0.995,
+      "gamma": 0.995
+    },
+    "training": {
+      "num_epochs": 10,
+      "vf_coef": 0.8,
+      "ent_coef": 0.01,
+      "clip_ratio": 0.1,
+      "normalize_advantage": false
+    },
+    "learning": {
+      "diff_threshold": 0.85,
+      "diff_max": 256,
+      "diff_metric": "ppo_deterministic"
+    },
+    "optimizer": {
+      "lr": 0.0003
+    },
+    "evals": {
+      "ppo_deterministic": {
+        "num_episodes": 100,
+        "deterministic": true,
+        "num_searches": 1,
+        "num_mcts_searches": 0,
+        "num_cores": 32,
+        "C": 1.41
+      },
+      "ppo_10": {
+        "num_episodes": 100,
+        "deterministic": false,
+        "num_searches": 10,
+        "num_mcts_searches": 0,
+        "num_cores": 32,
+        "C": 1.41
+      }
+    },
+    "logging": {
+      "log_freq": 1,
+      "checkpoint_freq": 10
+    }
+  }
+}
