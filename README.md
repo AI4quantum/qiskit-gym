@@ -3,9 +3,10 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Qiskit](https://img.shields.io/badge/Qiskit-2.1+-purple.svg)](https://qiskit.org/)
 
-**Qiskit Gym** is a collection of quantum circuit synthesis problems formulated as reinforcement learning environments. Train AI agents to discover efficient and near-optimal quantum circuit implementations for various quantum computing tasks.
+**Qiskit Gym** is a collection of quantum information science problems formulated as reinforcement learning environments. 
 
 ## 🚀 Key Features
+Train AI agents to discover efficient and near-optimal quantum circuit implementations for various quantum computing tasks.
 
 - **🎯 Purpose-Built RL Environments**: Specialized Gymnasium-compatible environments for quantum circuit synthesis problems
 - **🔧 Hardware-Aware Environments**: Design environments matching real quantum hardware coupling maps
@@ -15,6 +16,7 @@
 - **💾 Model Persistence**: Save and load trained models for deployment
 - **⚖️ Scalable Training**: Efficient parallel environment execution
 - **📊 Built-in TensorBoard Integration**: For training visualization and performance tracking
+- **🔌 Qiskit integration**: You can use Qiksit seamlessly to define your problem and use your trained models.
 
 ## 🎲 Supported Problem Types
 
@@ -26,6 +28,19 @@ Decompose linear Boolean functions into efficient quantum circuits using CNOT ga
 
 ### 🌊 **Clifford Synthesis**
 Generate optimal implementations of Clifford group elements with customizable gate sets.
+
+## 🔭 Roadmap and Vision
+There are lots of interesting quantum computing problems that can be addressed with RL. We hope to centralize the problem formulations here to make it easier for Quantum and AI researchers to collaborate in taclikng them.
+
+For future releases we plan to include envs for:
+
+- Pauli Network synthesis
+- Qubit routing
+- Clifford+T synthesis
+
+We are also open to env requests and contributions!
+
+Stay tuned!
 
 ## 🏃‍♂️ Quick Start
 
@@ -79,3 +94,10 @@ We welcome contributions! Whether you're adding new synthesis problems, improvin
 ## 📝 License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE.txt) for details.
+
+
+## 🧪 Relevant Papers
+
+- Kremer, D., Villar, V., Paik, H., Duran, I., Faro, I., & Cruz-Benito, J. (2024). Practical and efficient quantum circuit synthesis and transpiling with reinforcement learning. arXiv preprint [arXiv:2405.13196](https://arxiv.org/abs/2405.13196).
+
+- Dubal, A., Kremer, D., Martiel, S., Villar, V., Wang, D., & Cruz-Benito, J. (2025). Pauli Network Circuit Synthesis with Reinforcement Learning. arXiv preprint [arXiv:2503.14448](https://arxiv.org/abs/2503.14448). 
