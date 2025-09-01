@@ -79,7 +79,3 @@ We welcome contributions! Whether you're adding new synthesis problems, improvin
 ## 📝 License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE.txt) for details.
-
----
-
-*⚛️ Quantum+AI Team. IBM Quantum, 2025* 
