@@ -31,39 +31,41 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install maturin twine
-          pip install .
-      
       - name: Validate release tag
         id: release
+        shell: bash
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          if [[ ! "${TAG}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Tag '${TAG}' does not match the expected x.y.z pattern."
-            exit 1
-          fi
-          echo "version=${TAG}" >> "${GITHUB_OUTPUT}"
-
+          python - <<'EOF'
+          import os, re, sys
+          tag = os.environ['GITHUB_REF_NAME']
+          if not re.match(r'^\d+\.\d+\.\d+.*$', tag):
+              print(f'::error::Tag {tag} does not match the expected x.y.z pattern.')
+              sys.exit(1)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'version={tag}\n')
+          EOF
       - name: Update Python project version
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
         run: |
-          python -c "
+          python - <<'EOF'
           import os, pathlib, re
           version = os.environ['RELEASE_VERSION']
-          p = pathlib.Path('pyproject.toml')
-          text = p.read_text()
-          text = re.sub(r'(?m)^version = \".*\"$', f'version = \"{version}\"', text)
-          text = re.sub(r'(?m)^dynamic = \[\"version\"\]\n?', '', text)
-          p.write_text(text)
-          "
+          pyproject = pathlib.Path('pyproject.toml')
+          text = pyproject.read_text()
+          text = re.sub(r'(?m)^version = ".*"$', f'version = "{version}"', text)
+          text = re.sub(r'(?m)^dynamic = \["version"\]\n?', '', text)
+          pyproject.write_text(text)
+
+          cargo = pathlib.Path('rust/Cargo.toml')
+          text = cargo.read_text()
+          cargo.write_text(re.sub(r'(?m)^version = ".*"$', f'version = "{version}"', text, count=1))
+          EOF
       - name: Build wheels
         run: maturin build --release -i python${{ matrix.python-version }}
       - name: Release wheels
         shell: bash
         run: |
-          ls -l rust/target/wheels/
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            rm rust/target/wheels/*-linux_*
-          fi
           ls -l rust/target/wheels/
           twine upload -u __token__ -p ${{ secrets.PYPI_API_TOKEN }} rust/target/wheels/*
