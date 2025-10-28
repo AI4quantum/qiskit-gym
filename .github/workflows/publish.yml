@@ -35,18 +35,15 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          python - <<'PY'
-import os
-import pathlib
-import re
-
-version = os.environ["RELEASE_VERSION"]
-pyproject = pathlib.Path("pyproject.toml")
-text = pyproject.read_text()
-text = re.sub(r'(?m)^version = ".*"$', f'version = "{version}"', text)
-text = re.sub(r'(?m)^dynamic = \["version"\]\n?', "", text)
-pyproject.write_text(text)
-PY
+          python -c "
+          import os, pathlib, re
+          version = os.environ['RELEASE_VERSION']
+          p = pathlib.Path('pyproject.toml')
+          text = p.read_text()
+          text = re.sub(r'(?m)^version = \".*\"$', f'version = \"{version}\"', text)
+          text = re.sub(r'(?m)^dynamic = \[\"version\"\]\n?', '', text)
+          p.write_text(text)
+          "
 
       - name: Publish to PyPI
         uses: PyO3/maturin-action@v1
