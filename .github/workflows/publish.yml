@@ -1,32 +1,46 @@
-name: Publish package
+name: Build and publish Python wheels
 
 on:
   push:
     tags:
-      - "[0-9]+.[0-9]+.[0-9]+"
-    branches:
-      - vv-fix
-
-permissions:
-  contents: read
+      - '[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
 
 jobs:
-  publish-release:
-    name: Publish to PyPI
-    runs-on: ubuntu-latest
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          # Used for the x86_64 builds.
+          - macos-13
+          # Used for the ARM builds.
+          - macos-14
+          - windows-latest
+        python-version: ['3.9', '3.10', '3.11', '3.12']
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Validate release tag
-        id: release
+          python-version: ${{ matrix.python-version }}
+          architecture: ${{ matrix.os == 'macos-14' && 'arm64' || 'x64' }}
+      - name: Install dependencies
         run: |
-          echo "version=0.1.0" >> "${GITHUB_OUTPUT}"
+          python -m pip install --upgrade pip
+          pip install maturin twine
+          pip install .
+      
+      - name: Validate release tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "${TAG}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '${TAG}' does not match the expected x.y.z pattern."
+            exit 1
+          fi
+          echo "version=${TAG}" >> "${GITHUB_OUTPUT}"
 
       - name: Update Python project version
         env:
@@ -41,12 +55,14 @@ jobs:
           text = re.sub(r'(?m)^dynamic = \[\"version\"\]\n?', '', text)
           p.write_text(text)
           "
-
-      - name: Publish to TestPyPI
-        uses: PyO3/maturin-action@v1
-        with:
-          command: publish
-          args: --manifest-path rust/Cargo.toml --skip-existing --repository-url https://test.pypi.org/legacy/
-        env:
-          MATURIN_USERNAME: __token__
-          MATURIN_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+      - name: Build wheels
+        run: maturin build --release -i python${{ matrix.python-version }} --features python_bindings
+      - name: Release wheels
+        shell: bash
+        run: |
+          ls -l rust/target/wheels/
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            rm rust/target/wheels/*-linux_*
+          fi
+          ls -l rust/target/wheels/
+          twine upload -u __token__ -p ${{ secrets.PYPI_API_TOKEN }} rust/target/wheels/*
