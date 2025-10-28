@@ -36,6 +36,7 @@ jobs:
           pip install .
       
       - name: Validate release tag
+        id: release
         run: |
           echo "version=0.1.0" >> "${GITHUB_OUTPUT}"
 
