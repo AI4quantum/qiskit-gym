@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+*'
-    branches:
-      - vv-fix
   workflow_dispatch:
 
 jobs:
@@ -22,7 +20,7 @@ jobs:
           # Used for the ARM builds.
           - macos-14
           - windows-latest
-        python-version: ['3.9']
+        python-version: ['3.9', '3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,7 +36,12 @@ jobs:
       - name: Validate release tag
         id: release
         run: |
-          echo "version=0.1.0" >> "${GITHUB_OUTPUT}"
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "${TAG}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '${TAG}' does not match the expected x.y.z pattern."
+            exit 1
+          fi
+          echo "version=${TAG}" >> "${GITHUB_OUTPUT}"
 
       - name: Update Python project version
         env:
@@ -63,4 +66,4 @@ jobs:
             rm rust/target/wheels/*-linux_*
           fi
           ls -l rust/target/wheels/
-          twine upload -r testpypi -u __token__ -p ${{ secrets.TEST_PYPI_API_TOKEN }} rust/target/wheels/*
+          twine upload -u __token__ -p ${{ secrets.PYPI_API_TOKEN }} rust/target/wheels/*
