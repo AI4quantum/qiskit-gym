@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+*'
+    branches:
+      - vv-fix
   workflow_dispatch:
 
 jobs:
@@ -20,7 +22,7 @@ jobs:
           # Used for the ARM builds.
           - macos-14
           - windows-latest
-        python-version: ['3.9', '3.10', '3.11', '3.12']
+        python-version: ['3.9']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -65,4 +67,4 @@ jobs:
             rm rust/target/wheels/*-linux_*
           fi
           ls -l rust/target/wheels/
-          twine upload -u __token__ -p ${{ secrets.PYPI_API_TOKEN }} rust/target/wheels/*
+          twine upload -r testpypi -u __token__ -p ${{ secrets.TEST_PYPI_API_TOKEN }} rust/target/wheels/*
