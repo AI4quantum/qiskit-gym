@@ -1,26 +1,38 @@
-name: Publish package
+name: Build and publish Python wheels
 
 on:
   push:
     tags:
-      - "[0-9]+.[0-9]+.[0-9]+"
-
-permissions:
-  contents: read
+      - '[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
 
 jobs:
-  build-and-publish:
-    name: Build and publish to PyPI
-    runs-on: ubuntu-latest
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          # Used for the x86_64 builds.
+          - macos-13
+          # Used for the ARM builds.
+          - macos-14
+          - windows-latest
+        python-version: ['3.9', '3.10', '3.11', '3.12']
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
+          python-version: ${{ matrix.python-version }}
+          architecture: ${{ matrix.os == 'macos-14' && 'arm64' || 'x64' }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install maturin twine
+          pip install .
+      
       - name: Validate release tag
         id: release
         run: |
@@ -35,24 +47,23 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          python - <<'PY'
-import os
-import pathlib
-import re
-
-version = os.environ["RELEASE_VERSION"]
-pyproject = pathlib.Path("pyproject.toml")
-text = pyproject.read_text()
-text = re.sub(r'(?m)^version = ".*"$', f'version = "{version}"', text)
-text = re.sub(r'(?m)^dynamic = \["version"\]\n?', "", text)
-pyproject.write_text(text)
-PY
-
-      - name: Publish to PyPI
-        uses: PyO3/maturin-action@v1
-        with:
-          command: publish
-          args: --manifest-path rust/Cargo.toml --skip-existing
-        env:
-          MATURIN_USERNAME: __token__
-          MATURIN_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+          python -c "
+          import os, pathlib, re
+          version = os.environ['RELEASE_VERSION']
+          p = pathlib.Path('pyproject.toml')
+          text = p.read_text()
+          text = re.sub(r'(?m)^version = \".*\"$', f'version = \"{version}\"', text)
+          text = re.sub(r'(?m)^dynamic = \[\"version\"\]\n?', '', text)
+          p.write_text(text)
+          "
+      - name: Build wheels
+        run: maturin build --release -i python${{ matrix.python-version }}
+      - name: Release wheels
+        shell: bash
+        run: |
+          ls -l rust/target/wheels/
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            rm rust/target/wheels/*-linux_*
+          fi
+          ls -l rust/target/wheels/
+          twine upload -u __token__ -p ${{ secrets.PYPI_API_TOKEN }} rust/target/wheels/*
