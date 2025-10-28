@@ -1,0 +1,58 @@
+name: Publish package
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate release tag
+        id: release
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "${TAG}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '${TAG}' does not match the expected x.y.z pattern."
+            exit 1
+          fi
+          echo "version=${TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Update Python project version
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          python - <<'PY'
+import os
+import pathlib
+import re
+
+version = os.environ["RELEASE_VERSION"]
+pyproject = pathlib.Path("pyproject.toml")
+text = pyproject.read_text()
+text = re.sub(r'(?m)^version = ".*"$', f'version = "{version}"', text)
+text = re.sub(r'(?m)^dynamic = \["version"\]\n?', "", text)
+pyproject.write_text(text)
+PY
+
+      - name: Publish to PyPI
+        uses: PyO3/maturin-action@v1
+        with:
+          command: publish
+          args: --manifest-path rust/Cargo.toml --skip-existing
+        env:
+          MATURIN_USERNAME: __token__
+          MATURIN_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
