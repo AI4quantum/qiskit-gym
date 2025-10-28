@@ -54,7 +54,7 @@ jobs:
           p.write_text(text)
           "
       - name: Build wheels
-        run: maturin build --release -i python${{ matrix.python-version }} --features python_bindings
+        run: maturin build --release -i python${{ matrix.python-version }}
       - name: Release wheels
         shell: bash
         run: |
