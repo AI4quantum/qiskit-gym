@@ -1,6 +1,6 @@
 # Qiskit Gym 🏋️‍♀️
 
-[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![Qiskit](https://img.shields.io/badge/Qiskit-2.1+-purple.svg)](https://qiskit.org/)
 
 **Qiskit Gym** is a collection of quantum information science problems formulated as reinforcement learning environments. 
