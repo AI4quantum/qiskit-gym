@@ -10,6 +10,8 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
+from __future__ import annotations
+
 from qiskit_gym import qiskit_gym_rs
 
 from .adapters import gym_adapter
