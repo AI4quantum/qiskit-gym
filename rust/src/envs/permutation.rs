@@ -16,9 +16,10 @@ use pyo3::prelude::*;
 use rand::distributions::{Distribution, Uniform};
 
 use twisterl::rl::env::Env;
-use twisterl::python_interface::env::{PyBaseEnv, get_env_ref, get_env_mut};
+use twisterl::python_interface::env::PyBaseEnv;
 
 use crate::envs::common::Gate;
+use crate::envs::symmetry::compute_twists_square;
 
 
 // This is the Env definition
@@ -32,7 +33,9 @@ pub struct Permutation {
     pub difficulty: usize,
     pub gateset: Vec<Gate>,
     pub depth_slope: usize,
-    pub max_depth: usize
+    pub max_depth: usize,
+    pub obs_perms: Vec<Vec<usize>>,
+    pub act_perms: Vec<Vec<usize>>,
 }
 
 
@@ -44,7 +47,19 @@ impl Permutation {
         depth_slope: usize,
         max_depth: usize,
     ) -> Self {
-        Permutation {state:(0..num_qubits).collect(), depth:1, success:true, num_qubits:num_qubits, difficulty:difficulty, gateset:gateset, depth_slope:depth_slope, max_depth:max_depth}
+        let (obs_perms, act_perms) = compute_twists_square(num_qubits, &gateset);
+        Permutation {
+            state:(0..num_qubits).collect(),
+            depth:1,
+            success:true,
+            num_qubits,
+            difficulty,
+            gateset,
+            depth_slope,
+            max_depth,
+            obs_perms,
+            act_perms,
+        }
     }
 
     pub fn solved(&self) -> bool {
@@ -131,6 +146,10 @@ impl Env for Permutation {
 
     fn observe(&self,) -> Vec<usize> {
         self.state.iter().enumerate().map(|(i, v)| i * self.num_qubits + v ).collect()  
+    }
+
+    fn twists(&self) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
+        (self.obs_perms.clone(), self.act_perms.clone())
     }
 }
 

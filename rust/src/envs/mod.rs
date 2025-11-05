@@ -15,3 +15,4 @@ pub mod clifford;
 pub mod linear_function;
 pub mod permutation;
 pub mod common;
+pub mod symmetry;

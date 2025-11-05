@@ -16,9 +16,10 @@ use pyo3::prelude::*;
 use rand::distributions::{Distribution, Uniform};
 
 use twisterl::rl::env::Env;
-use twisterl::python_interface::env::{PyBaseEnv, get_env_ref, get_env_mut};
+use twisterl::python_interface::env::PyBaseEnv;
 
 use crate::envs::common::Gate;
+use crate::envs::symmetry::compute_twists_clifford;
 
 
 #[derive(Clone)]
@@ -153,6 +154,8 @@ pub struct Clifford {
     pub gateset: Vec<Gate>,
     pub depth_slope: usize,
     pub max_depth: usize,
+    pub obs_perms: Vec<Vec<usize>>,
+    pub act_perms: Vec<Vec<usize>>,
 }
 
 impl Clifford {
@@ -165,7 +168,8 @@ impl Clifford {
     ) -> Self {
         let cf = CFState::new(num_qubits);
         let success = cf.solved();
-        Clifford { cf, depth: 1, success, difficulty, gateset, depth_slope, max_depth }
+        let (obs_perms, act_perms) = compute_twists_clifford(num_qubits, &gateset);
+        Clifford { cf, depth: 1, success, difficulty, gateset, depth_slope, max_depth, obs_perms, act_perms }
     }
     pub fn solved(&self) -> bool { self.cf.solved() }
 }
@@ -245,6 +249,10 @@ impl Env for Clifford {
             .enumerate()
             .filter_map(|(i, &v)| if v { Some(i) } else { None })
             .collect()
+    }
+
+    fn twists(&self) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
+        (self.obs_perms.clone(), self.act_perms.clone())
     }
 }
 
