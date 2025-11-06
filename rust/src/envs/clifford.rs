@@ -358,6 +358,10 @@ impl Env for Clifford {
         self.success
     }
 
+    fn success(&self) -> bool {
+        self.success
+    }
+
     fn observe(&self) -> Vec<usize> {
         self.cf
             .data
