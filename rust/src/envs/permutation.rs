@@ -144,6 +144,10 @@ impl Env for Permutation {
         }
     }
 
+    fn success(&self) -> bool {
+        self.success
+    }
+    
     fn observe(&self,) -> Vec<usize> {
         self.state.iter().enumerate().map(|(i, v)| i * self.num_qubits + v ).collect()  
     }
