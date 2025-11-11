@@ -19,7 +19,9 @@ use twisterl::rl::env::Env;
 use twisterl::python_interface::env::PyBaseEnv;
 
 use crate::envs::common::Gate;
+use crate::envs::metrics::{MetricsCounts, MetricsTracker, MetricsWeights};
 use crate::envs::symmetry::compute_twists_square;
+use std::collections::HashMap;
 
 
 // This is the Env definition
@@ -36,6 +38,10 @@ pub struct Permutation {
     pub max_depth: usize,
     pub obs_perms: Vec<Vec<usize>>,
     pub act_perms: Vec<Vec<usize>>,
+    metrics: MetricsTracker,
+    metrics_values: MetricsCounts,
+    metrics_weights: MetricsWeights,
+    reward_value: f32,
 }
 
 
@@ -46,12 +52,16 @@ impl Permutation {
         gateset: Vec<Gate>,
         depth_slope: usize,
         max_depth: usize,
+        metrics_weights: MetricsWeights,
     ) -> Self {
         let (obs_perms, act_perms) = compute_twists_square(num_qubits, &gateset);
+        let metrics = MetricsTracker::new(num_qubits);
+        let metrics_values = metrics.snapshot();
+        let success = true;
         Permutation {
             state:(0..num_qubits).collect(),
             depth:1,
-            success:true,
+            success,
             num_qubits,
             difficulty,
             gateset,
@@ -59,6 +69,10 @@ impl Permutation {
             max_depth,
             obs_perms,
             act_perms,
+            metrics,
+            metrics_values,
+            metrics_weights,
+            reward_value: 1.0,
         }
     }
 
@@ -101,11 +115,19 @@ impl Env for Permutation {
 
         self.depth = self.max_depth;  
         self.success = self.solved();
+        self.metrics.reset();
+        self.metrics_values = self.metrics.snapshot();
+        self.reward_value = if self.success { 1.0 } else { 0.0 };
     }
 
     fn reset(&mut self) {
         // Reset the state to the target
         self.state = (0..self.num_qubits).collect();
+        self.depth = self.max_depth;
+        self.success = self.solved();
+        self.metrics.reset();
+        self.metrics_values = self.metrics.snapshot();
+        self.reward_value = if self.success { 1.0 } else { 0.0 };
 
         let mut rng = rand::thread_rng();
         let action_range = Uniform::new(0, self.num_actions());
@@ -117,15 +139,31 @@ impl Env for Permutation {
         }
         self.depth = (self.depth_slope * self.difficulty).min(self.max_depth);
         self.success = self.solved();
+        self.metrics.reset();
+        self.metrics_values = self.metrics.snapshot();
+        self.reward_value = if self.success { 1.0 } else { 0.0 };
     }
 
     fn step(&mut self, action: usize)  {
-        match self.gateset[action] {
-            Gate::SWAP(q1, q2) => (self.state[q2], self.state[q1]) = (self.state[q1], self.state[q2]),
-            _ => {}
+        let mut penalty = 0.0f32;
+
+        if action < self.gateset.len() {
+            let gate = &self.gateset[action];
+            let previous = self.metrics_values.clone();
+            self.metrics.apply_gate(gate);
+            let new_metrics = self.metrics.snapshot();
+            penalty = new_metrics.weighted_delta(&previous, &self.metrics_weights);
+            self.metrics_values = new_metrics;
+
+            match gate {
+                Gate::SWAP(q1, q2) => (self.state[*q2], self.state[*q1]) = (self.state[*q1], self.state[*q2]),
+                _ => {}
+            }
         }
         self.depth = self.depth.saturating_sub(1); // Prevent underflow
         self.success = self.solved();
+        let achieved = if self.success { 1.0 } else { 0.0 };
+        self.reward_value = achieved - penalty;
     }
     
     fn masks(&self) -> Vec<bool> {
@@ -136,13 +174,7 @@ impl Env for Permutation {
         self.depth == 0 || self.success
     }
 
-    fn reward(&self) -> f32 {
-        if self.success {
-            1.0
-        } else {
-            if self.depth == 0 { -0.5 } else { -0.5/(self.max_depth as f32) }
-        }
-    }
+    fn reward(&self) -> f32 { self.reward_value }
 
     fn success(&self) -> bool {
         self.success
@@ -169,9 +201,11 @@ impl PyPermutationEnv {
         difficulty: usize,
         gateset: Vec<Gate>,
         depth_slope: usize,
-        max_depth: usize
+        max_depth: usize,
+        metrics_weights: Option<HashMap<String, f32>>,
     ) -> (Self, PyBaseEnv) {
-        let env = Permutation::new(num_qubits, difficulty, gateset, depth_slope, max_depth);
+        let weights = MetricsWeights::from_hashmap(metrics_weights);
+        let env = Permutation::new(num_qubits, difficulty, gateset, depth_slope, max_depth, weights);
         let env = Box::new(env);
         (PyPermutationEnv, PyBaseEnv { env })
     }

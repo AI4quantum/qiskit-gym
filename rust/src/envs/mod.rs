@@ -16,3 +16,4 @@ pub mod linear_function;
 pub mod permutation;
 pub mod common;
 pub mod symmetry;
+pub mod metrics;

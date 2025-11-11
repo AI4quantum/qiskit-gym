@@ -19,7 +19,9 @@ use twisterl::rl::env::Env;
 use twisterl::python_interface::env::PyBaseEnv;
 
 use crate::envs::common::Gate;
+use crate::envs::metrics::{MetricsCounts, MetricsTracker, MetricsWeights};
 use crate::envs::symmetry::compute_twists_clifford;
+use std::collections::HashMap;
 
 
 #[derive(Clone)]
@@ -156,6 +158,10 @@ pub struct Clifford {
     pub max_depth: usize,
     pub obs_perms: Vec<Vec<usize>>,
     pub act_perms: Vec<Vec<usize>>,
+    metrics: MetricsTracker,
+    metrics_values: MetricsCounts,
+    metrics_weights: MetricsWeights,
+    reward_value: f32,
 }
 
 impl Clifford {
@@ -165,11 +171,28 @@ impl Clifford {
         gateset: Vec<Gate>,
         depth_slope: usize,
         max_depth: usize,
+        metrics_weights: MetricsWeights,
     ) -> Self {
         let cf = CFState::new(num_qubits);
         let success = cf.solved();
         let (obs_perms, act_perms) = compute_twists_clifford(num_qubits, &gateset);
-        Clifford { cf, depth: 1, success, difficulty, gateset, depth_slope, max_depth, obs_perms, act_perms }
+        let metrics = MetricsTracker::new(num_qubits);
+        let metrics_values = metrics.snapshot();
+        Clifford {
+            cf,
+            depth: 1,
+            success,
+            difficulty,
+            gateset,
+            depth_slope,
+            max_depth,
+            obs_perms,
+            act_perms,
+            metrics,
+            metrics_values,
+            metrics_weights,
+            reward_value: if success { 1.0 } else { 0.0 },
+        }
     }
     pub fn solved(&self) -> bool { self.cf.solved() }
 }
@@ -193,12 +216,18 @@ impl Env for Clifford {
         self.cf.data = state.iter().map(|&x| x > 0).collect();
         self.depth = self.max_depth;
         self.success = self.solved();
+        self.metrics.reset();
+        self.metrics_values = self.metrics.snapshot();
+        self.reward_value = if self.success { 1.0 } else { 0.0 };
     }
 
     fn reset(&mut self) {
         self.cf = CFState::new(self.cf.n);
         self.depth = self.max_depth;
         self.success = self.solved();
+        self.metrics.reset();
+        self.metrics_values = self.metrics.snapshot();
+        self.reward_value = if self.success { 1.0 } else { 0.0 };
 
         let mut rng = rand::thread_rng();
         let action_range = Uniform::new(0, self.num_actions());
@@ -209,21 +238,38 @@ impl Env for Clifford {
         }
         self.depth = (self.depth_slope * self.difficulty).min(self.max_depth);
         self.success = self.solved();
+        self.metrics.reset();
+        self.metrics_values = self.metrics.snapshot();
+        self.reward_value = if self.success { 1.0 } else { 0.0 };
     }
 
     fn step(&mut self, action: usize) {
-        match self.gateset[action] {
-            Gate::H(q)      => self.cf.h(q),
-            Gate::S(q)      => self.cf.s(q),
-            Gate::Sdg(q)    => self.cf.sdg(q),   // identical to S modulo global phase (ignored)
-            Gate::SX(q)     => self.cf.sx(q),
-            Gate::SXdg(q)   => self.cf.sxdg(q),  // identical to SX modulo global phase (ignored)
-            Gate::CX(c, t)  => self.cf.cx(c, t),
-            Gate::CZ(a, b)  => self.cf.cz(a, b),
-            Gate::SWAP(a,b) => self.cf.swap(a, b),
+        let mut penalty = 0.0f32;
+
+        if action < self.gateset.len() {
+            let gate = &self.gateset[action];
+            let previous = self.metrics_values.clone();
+            self.metrics.apply_gate(gate);
+            let new_metrics = self.metrics.snapshot();
+            penalty = new_metrics.weighted_delta(&previous, &self.metrics_weights);
+            self.metrics_values = new_metrics;
+
+            match gate {
+                Gate::H(q) => self.cf.h(*q),
+                Gate::S(q) => self.cf.s(*q),
+                Gate::Sdg(q) => self.cf.sdg(*q), // identical to S modulo global phase (ignored)
+                Gate::SX(q) => self.cf.sx(*q),
+                Gate::SXdg(q) => self.cf.sxdg(*q), // identical to SX modulo global phase (ignored)
+                Gate::CX(c, t) => self.cf.cx(*c, *t),
+                Gate::CZ(a, b) => self.cf.cz(*a, *b),
+                Gate::SWAP(a, b) => self.cf.swap(*a, *b),
+            }
         }
+
         self.depth = self.depth.saturating_sub(1);
         self.success = self.solved();
+        let achieved = if self.success { 1.0 } else { 0.0 };
+        self.reward_value = achieved - penalty;
     }
 
     fn masks(&self) -> Vec<bool> {
@@ -232,15 +278,7 @@ impl Env for Clifford {
 
     fn is_final(&self) -> bool { self.depth == 0 || self.success }
 
-    fn reward(&self) -> f32 {
-        if self.success {
-            1.0
-        } else if self.depth == 0 {
-            -0.5
-        } else {
-            -0.5 / (self.max_depth as f32)
-        }
-    }
+    fn reward(&self) -> f32 { self.reward_value }
 
     fn success(&self) -> bool {
         self.success
@@ -271,9 +309,11 @@ impl PyCliffordEnv {
         difficulty: usize,
         gateset: Vec<Gate>,
         depth_slope: usize,
-        max_depth: usize
+        max_depth: usize,
+        metrics_weights: Option<HashMap<String, f32>>,
     ) -> (Self, PyBaseEnv) {
-        let env = Clifford::new(num_qubits, difficulty, gateset, depth_slope, max_depth);
+        let weights = MetricsWeights::from_hashmap(metrics_weights);
+        let env = Clifford::new(num_qubits, difficulty, gateset, depth_slope, max_depth, weights);
         let env = Box::new(env);
         (PyCliffordEnv, PyBaseEnv { env })
     }
