@@ -14,6 +14,7 @@ that they have been altered from the originals.
 use pyo3::prelude::*;
 
 use rand::distributions::{Distribution, Uniform};
+use rand::Rng;
 
 use twisterl::rl::env::Env;
 use twisterl::python_interface::env::PyBaseEnv;
@@ -142,6 +143,35 @@ impl CFState {
         }
         true
     }
+
+    fn inverse(&self) -> Self {
+        let dim = self.dim();
+        let mut mat = self.clone();
+        let mut inv = CFState::new(self.n);
+
+        for col in 0..dim {
+            if !mat.get(col, col) {
+                let pivot = ((col + 1)..dim).find(|&row| mat.get(row, col));
+                let pivot = pivot.expect("CFState is singular; cannot invert");
+                mat.swap_rows(col, pivot);
+                inv.swap_rows(col, pivot);
+            }
+
+            for row in 0..dim {
+                if row != col && mat.get(row, col) {
+                    mat.row_xor(row, col);
+                    inv.row_xor(row, col);
+                }
+            }
+        }
+
+        debug_assert!(mat.solved(), "CFState inverse computation failed");
+        inv
+    }
+
+    fn invert(&mut self) {
+        *self = self.inverse();
+    }
 }
 
 // -------- Env: Clifford synthesis over the symplectic tableau (phase ignored) --------
@@ -162,6 +192,8 @@ pub struct Clifford {
     metrics_values: MetricsCounts,
     metrics_weights: MetricsWeights,
     reward_value: f32,
+    add_inverts: bool,
+    inverted: bool,
 }
 
 impl Clifford {
@@ -172,6 +204,7 @@ impl Clifford {
         depth_slope: usize,
         max_depth: usize,
         metrics_weights: MetricsWeights,
+        add_inverts: bool,
     ) -> Self {
         let cf = CFState::new(num_qubits);
         let success = cf.solved();
@@ -192,9 +225,34 @@ impl Clifford {
             metrics_values,
             metrics_weights,
             reward_value: if success { 1.0 } else { 0.0 },
+            add_inverts,
+            inverted: false,
         }
     }
     pub fn solved(&self) -> bool { self.cf.solved() }
+
+    fn apply_gate_to_state(&mut self, gate: &Gate) {
+        match gate {
+            Gate::H(q) => self.cf.h(*q),
+            Gate::S(q) => self.cf.s(*q),
+            Gate::Sdg(q) => self.cf.sdg(*q), // identical to S modulo global phase (ignored)
+            Gate::SX(q) => self.cf.sx(*q),
+            Gate::SXdg(q) => self.cf.sxdg(*q), // identical to SX modulo global phase (ignored)
+            Gate::CX(c, t) => self.cf.cx(*c, *t),
+            Gate::CZ(a, b) => self.cf.cz(*a, *b),
+            Gate::SWAP(a, b) => self.cf.swap(*a, *b),
+        }
+    }
+
+    fn maybe_random_invert(&mut self) {
+        if !self.add_inverts {
+            return;
+        }
+        if rand::thread_rng().gen_bool(0.5) {
+            self.cf.invert();
+            self.inverted = !self.inverted;
+        }
+    }
 }
 
 impl Env for Clifford {
@@ -219,6 +277,7 @@ impl Env for Clifford {
         self.metrics.reset();
         self.metrics_values = self.metrics.snapshot();
         self.reward_value = if self.success { 1.0 } else { 0.0 };
+        self.inverted = false;
     }
 
     fn reset(&mut self) {
@@ -234,39 +293,33 @@ impl Env for Clifford {
 
         for _ in 0..self.difficulty {
             let action = action_range.sample(&mut rng);
-            self.step(action);
+            if let Some(gate) = self.gateset.get(action).cloned() {
+                self.apply_gate_to_state(&gate);
+            }
         }
         self.depth = (self.depth_slope * self.difficulty).min(self.max_depth);
         self.success = self.solved();
         self.metrics.reset();
         self.metrics_values = self.metrics.snapshot();
         self.reward_value = if self.success { 1.0 } else { 0.0 };
+        self.inverted = false;
     }
 
     fn step(&mut self, action: usize) {
         let mut penalty = 0.0f32;
 
-        if action < self.gateset.len() {
-            let gate = &self.gateset[action];
+        if let Some(gate) = self.gateset.get(action).cloned() {
             let previous = self.metrics_values.clone();
-            self.metrics.apply_gate(gate);
+            self.metrics.apply_gate(&gate);
             let new_metrics = self.metrics.snapshot();
             penalty = new_metrics.weighted_delta(&previous, &self.metrics_weights);
             self.metrics_values = new_metrics;
 
-            match gate {
-                Gate::H(q) => self.cf.h(*q),
-                Gate::S(q) => self.cf.s(*q),
-                Gate::Sdg(q) => self.cf.sdg(*q), // identical to S modulo global phase (ignored)
-                Gate::SX(q) => self.cf.sx(*q),
-                Gate::SXdg(q) => self.cf.sxdg(*q), // identical to SX modulo global phase (ignored)
-                Gate::CX(c, t) => self.cf.cx(*c, *t),
-                Gate::CZ(a, b) => self.cf.cz(*a, *b),
-                Gate::SWAP(a, b) => self.cf.swap(*a, *b),
-            }
+            self.apply_gate_to_state(&gate);
         }
 
         self.depth = self.depth.saturating_sub(1);
+        self.maybe_random_invert();
         self.success = self.solved();
         let achieved = if self.success { 1.0 } else { 0.0 };
         self.reward_value = achieved - penalty;
@@ -304,6 +357,15 @@ pub struct PyCliffordEnv;
 #[pymethods]
 impl PyCliffordEnv {
     #[new]
+    #[pyo3(signature = (
+        num_qubits,
+        difficulty,
+        gateset,
+        depth_slope,
+        max_depth,
+        metrics_weights=None,
+        add_inverts=None,
+    ))]
     pub fn new(
         num_qubits: usize,
         difficulty: usize,
@@ -311,9 +373,18 @@ impl PyCliffordEnv {
         depth_slope: usize,
         max_depth: usize,
         metrics_weights: Option<HashMap<String, f32>>,
+        add_inverts: Option<bool>,
     ) -> (Self, PyBaseEnv) {
         let weights = MetricsWeights::from_hashmap(metrics_weights);
-        let env = Clifford::new(num_qubits, difficulty, gateset, depth_slope, max_depth, weights);
+        let env = Clifford::new(
+            num_qubits,
+            difficulty,
+            gateset,
+            depth_slope,
+            max_depth,
+            weights,
+            add_inverts.unwrap_or(true),
+        );
         let env = Box::new(env);
         (PyCliffordEnv, PyBaseEnv { env })
     }
