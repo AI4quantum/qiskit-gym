@@ -43,6 +43,7 @@ class BaseSynthesisEnv(ABC):
         difficulty: int = 1,
         depth_slope: int = 2,
         max_depth: int = 128,
+        metrics_weights: dict[str, float] | None = None,
     ):
         if basis_gates is None:
             basis_gates = tuple(cls.allowed_gates)
@@ -72,6 +73,7 @@ class BaseSynthesisEnv(ABC):
             "gateset": gateset,
             "depth_slope": depth_slope,
             "max_depth": max_depth,
+            "metrics_weights": metrics_weights,
         }
         return cls(**config)
 
@@ -106,6 +108,7 @@ class CliffordGym(CliffordEnv, BaseSynthesisEnv):
         difficulty: int = 1,
         depth_slope: int = 2,
         max_depth: int = 128,
+        metrics_weights: dict[str, float] | None = None,
     ):
         super().__init__(**{
             "num_qubits": num_qubits,
@@ -113,6 +116,7 @@ class CliffordGym(CliffordEnv, BaseSynthesisEnv):
             "gateset": gateset,
             "depth_slope": depth_slope,
             "max_depth": max_depth,
+            "metrics_weights": metrics_weights,
         })
 
     def get_state(self, input: QuantumCircuit | Clifford):
@@ -138,6 +142,7 @@ class LinearFunctionGym(LinearFunctionEnv, BaseSynthesisEnv):
         difficulty: int = 1,
         depth_slope: int = 2,
         max_depth: int = 128,
+        metrics_weights: dict[str, float] | None = None,
     ):
         super().__init__(**{
             "num_qubits": num_qubits,
@@ -145,6 +150,7 @@ class LinearFunctionGym(LinearFunctionEnv, BaseSynthesisEnv):
             "gateset": gateset,
             "depth_slope": depth_slope,
             "max_depth": max_depth,
+            "metrics_weights": metrics_weights,
         })
     
     def get_state(self, input: QuantumCircuit | LinearFunction):
@@ -172,6 +178,7 @@ class PermutationGym(PermutationEnv, BaseSynthesisEnv):
         difficulty: int = 1,
         depth_slope: int = 2,
         max_depth: int = 128,
+        metrics_weights: dict[str, float] | None = None,
     ):
         super().__init__(**{
             "num_qubits": num_qubits,
@@ -179,6 +186,7 @@ class PermutationGym(PermutationEnv, BaseSynthesisEnv):
             "gateset": gateset,
             "depth_slope": depth_slope,
             "max_depth": max_depth,
+            "metrics_weights": metrics_weights,
         })
 
     def get_state(self, input: QuantumCircuit | PermutationGate | Iterable[int]):
