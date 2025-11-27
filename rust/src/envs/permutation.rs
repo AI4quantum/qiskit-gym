@@ -39,6 +39,7 @@ pub struct Permutation {
     pub max_depth: usize,
     pub obs_perms: Vec<Vec<usize>>,
     pub act_perms: Vec<Vec<usize>>,
+    pub add_inverts: bool,
     metrics: MetricsTracker,
     metrics_values: MetricsCounts,
     metrics_weights: MetricsWeights,
@@ -84,6 +85,7 @@ impl Permutation {
             max_depth,
             obs_perms,
             act_perms,
+            add_inverts,
             metrics,
             metrics_values,
             metrics_weights,
@@ -117,6 +119,16 @@ impl Permutation {
             self.state = Self::invert_perm(&self.state);
             self.inverted = !self.inverted;
         }
+    }
+
+    /// Compute the inverse of a permutation
+    /// For a permutation perm, returns inv such that perm[inv[i]] = i for all i
+    fn invert_perm(perm: &[usize]) -> Vec<usize> {
+        let mut inv = vec![0; perm.len()];
+        for (i, &val) in perm.iter().enumerate() {
+            inv[val] = i;
+        }
+        inv
     }
 
     pub fn solved(&self) -> bool {
