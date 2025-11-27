@@ -44,6 +44,7 @@ class BaseSynthesisEnv(ABC):
         depth_slope: int = 2,
         max_depth: int = 128,
         metrics_weights: dict[str, float] | None = None,
+        add_inverts: bool = False,
     ):
         if basis_gates is None:
             basis_gates = tuple(cls.allowed_gates)
@@ -74,6 +75,7 @@ class BaseSynthesisEnv(ABC):
             "depth_slope": depth_slope,
             "max_depth": max_depth,
             "metrics_weights": metrics_weights,
+            "add_inverts": add_inverts,
         }
         return cls(**config)
 
@@ -179,6 +181,7 @@ class PermutationGym(PermutationEnv, BaseSynthesisEnv):
         depth_slope: int = 2,
         max_depth: int = 128,
         metrics_weights: dict[str, float] | None = None,
+        add_inverts: bool = False,
     ):
         super().__init__(**{
             "num_qubits": num_qubits,
@@ -187,6 +190,7 @@ class PermutationGym(PermutationEnv, BaseSynthesisEnv):
             "depth_slope": depth_slope,
             "max_depth": max_depth,
             "metrics_weights": metrics_weights,
+            "add_inverts": add_inverts,
         })
 
     def get_state(self, input: QuantumCircuit | PermutationGate | Iterable[int]):

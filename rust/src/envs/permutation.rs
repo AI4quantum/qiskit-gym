@@ -14,6 +14,7 @@ that they have been altered from the originals.
 use pyo3::prelude::*;
 
 use rand::distributions::{Distribution, Uniform};
+use rand::Rng;
 
 use twisterl::rl::env::Env;
 use twisterl::python_interface::env::PyBaseEnv;
@@ -38,6 +39,7 @@ pub struct Permutation {
     pub max_depth: usize,
     pub obs_perms: Vec<Vec<usize>>,
     pub act_perms: Vec<Vec<usize>>,
+    pub add_inverts: bool,
     metrics: MetricsTracker,
     metrics_values: MetricsCounts,
     metrics_weights: MetricsWeights,
@@ -53,8 +55,11 @@ impl Permutation {
         depth_slope: usize,
         max_depth: usize,
         metrics_weights: MetricsWeights,
+        add_inverts: bool,
     ) -> Self {
+        println!("Computing perms");
         let (obs_perms, act_perms) = compute_twists_square(num_qubits, &gateset);
+        println!("Computing perms finshed");
         let metrics = MetricsTracker::new(num_qubits);
         let metrics_values = metrics.snapshot();
         let success = true;
@@ -69,11 +74,22 @@ impl Permutation {
             max_depth,
             obs_perms,
             act_perms,
+            add_inverts,
             metrics,
             metrics_values,
             metrics_weights,
             reward_value: 1.0,
         }
+    }
+
+    /// Compute the inverse of a permutation
+    /// For a permutation perm, returns inv such that perm[inv[i]] = i for all i
+    fn invert_perm(perm: &[usize]) -> Vec<usize> {
+        let mut inv = vec![0; perm.len()];
+        for (i, &val) in perm.iter().enumerate() {
+            inv[val] = i;
+        }
+        inv
     }
 
     pub fn solved(&self) -> bool {
@@ -160,6 +176,15 @@ impl Env for Permutation {
                 _ => {}
             }
         }
+
+        // Randomly invert the permutation with 50% probability during training
+        if self.add_inverts {
+            let mut rng = rand::thread_rng();
+            if rng.gen::<f32>() > 0.5 {
+                self.state = Self::invert_perm(&self.state);
+            }
+        }
+
         self.depth = self.depth.saturating_sub(1); // Prevent underflow
         self.success = self.solved();
         let achieved = if self.success { 1.0 } else { 0.0 };
@@ -196,6 +221,7 @@ pub struct PyPermutationEnv;
 #[pymethods]
 impl PyPermutationEnv {
     #[new]
+    #[pyo3(signature = (num_qubits, difficulty, gateset, depth_slope, max_depth, metrics_weights=None, add_inverts=None))]
     pub fn new(
         num_qubits: usize,
         difficulty: usize,
@@ -203,9 +229,11 @@ impl PyPermutationEnv {
         depth_slope: usize,
         max_depth: usize,
         metrics_weights: Option<HashMap<String, f32>>,
+        add_inverts: Option<bool>,
     ) -> (Self, PyBaseEnv) {
         let weights = MetricsWeights::from_hashmap(metrics_weights);
-        let env = Permutation::new(num_qubits, difficulty, gateset, depth_slope, max_depth, weights);
+        let add_inverts = add_inverts.unwrap_or(false);
+        let env = Permutation::new(num_qubits, difficulty, gateset, depth_slope, max_depth, weights, add_inverts);
         let env = Box::new(env);
         (PyPermutationEnv, PyBaseEnv { env })
     }
