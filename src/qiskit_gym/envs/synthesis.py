@@ -161,6 +161,7 @@ class LinearFunctionGym(LinearFunctionEnv, BaseSynthesisEnv):
         depth_slope: int = 2,
         max_depth: int = 128,
         metrics_weights: dict[str, float] | None = None,
+        add_inverts: bool = True,
         add_perms: bool = True,
     ):
         super().__init__(**{
@@ -170,14 +171,15 @@ class LinearFunctionGym(LinearFunctionEnv, BaseSynthesisEnv):
             "depth_slope": depth_slope,
             "max_depth": max_depth,
             "metrics_weights": metrics_weights,
+            "add_inverts": add_inverts,
             "add_perms": add_perms,
         })
     
     def get_state(self, input: QuantumCircuit | LinearFunction):
         if isinstance(input, QuantumCircuit):
-            input = LinearFunction(input.inverse())
-        elif isinstance(input, LinearFunction):
-            input = LinearFunction(Clifford(input).adjoint())
+            input = LinearFunction(input)
+        elif not isinstance(input, LinearFunction):
+            input = LinearFunction(Clifford(input))
         return np.array(input.linear).flatten().astype(int).tolist()
 
 

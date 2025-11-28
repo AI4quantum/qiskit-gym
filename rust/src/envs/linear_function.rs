@@ -14,6 +14,7 @@ that they have been altered from the originals.
 use pyo3::prelude::*;
 
 use rand::distributions::{Distribution, Uniform};
+use rand::Rng;
 
 use twisterl::rl::env::Env;
 use twisterl::python_interface::env::PyBaseEnv;
@@ -97,6 +98,56 @@ impl LFState {
         }
         true
     }
+
+    fn row_xor(&mut self, dest: usize, src: usize) {
+        if dest == src {
+            return;
+        }
+        for col in 0..self.size {
+            let dest_idx = self.index(dest, col);
+            let src_idx = self.index(src, col);
+            self.data[dest_idx] ^= self.data[src_idx];
+        }
+    }
+
+    fn swap_rows(&mut self, r1: usize, r2: usize) {
+        if r1 == r2 {
+            return;
+        }
+        for col in 0..self.size {
+            let i1 = self.index(r1, col);
+            let i2 = self.index(r2, col);
+            self.data.swap(i1, i2);
+        }
+    }
+
+    fn inverse(&self) -> Self {
+        let mut mat = self.clone();
+        let mut inv = LFState::new(self.size);
+
+        for col in 0..self.size {
+            if !mat.get(col, col) {
+                let pivot = ((col + 1)..self.size).find(|&row| mat.get(row, col));
+                let pivot = pivot.expect("LFState is singular; cannot invert");
+                mat.swap_rows(col, pivot);
+                inv.swap_rows(col, pivot);
+            }
+
+            for row in 0..self.size {
+                if row != col && mat.get(row, col) {
+                    mat.row_xor(row, col);
+                    inv.row_xor(row, col);
+                }
+            }
+        }
+
+        debug_assert!(mat.solved(), "LFState inverse computation failed");
+        inv
+    }
+
+    fn invert(&mut self) {
+        *self = self.inverse();
+    }
 }
 
 // This is the Env definition
@@ -116,6 +167,8 @@ pub struct LinearFunction {
     metrics_values: MetricsCounts,
     metrics_weights: MetricsWeights,
     reward_value: f32,
+    add_inverts: bool,
+    inverted: bool,
     add_perms: bool,
 }
 
@@ -128,6 +181,7 @@ impl LinearFunction {
         depth_slope: usize,
         max_depth: usize,
         metrics_weights: MetricsWeights,
+        add_inverts: bool,
         add_perms: bool,
     ) -> Self {
         let lf = LFState::new(num_qubits);
@@ -156,11 +210,23 @@ impl LinearFunction {
             metrics_values,
             metrics_weights,
             reward_value: if success { 1.0 } else { 0.0 },
+            add_inverts,
+            inverted: false,
             add_perms,
         }
     }
     pub fn solved(&self) -> bool {
         self.lf.solved()
+    }
+
+    fn maybe_random_invert(&mut self) {
+        if !self.add_inverts {
+            return;
+        }
+        if rand::thread_rng().gen_bool(0.5) {
+            self.lf.invert();
+            self.inverted = !self.inverted;
+        }
     }
 
 }
@@ -188,11 +254,13 @@ impl Env for LinearFunction {
 
     fn set_state(&mut self, state: Vec<i64>) {
         self.lf.data = state.iter().map(|&x| x>0).collect();
+        self.lf.invert();
         self.depth = self.max_depth;
         self.success = self.solved();
         self.metrics.reset();
         self.metrics_values = self.metrics.snapshot();
         //self.reward_value = if self.success { 1.0 } else { 0.0 };
+        self.inverted = false;
     }
 
     fn reset(&mut self) {
@@ -203,6 +271,7 @@ impl Env for LinearFunction {
         self.metrics.reset();
         self.metrics_values = self.metrics.snapshot();
         self.reward_value = if self.success { 1.0 } else { 0.0 };
+        self.inverted = false;
 
         let mut rng = rand::thread_rng();
         let action_range = Uniform::new(0, self.num_actions());
@@ -217,6 +286,7 @@ impl Env for LinearFunction {
         self.metrics.reset();
         self.metrics_values = self.metrics.snapshot();
         self.reward_value = if self.success { 1.0 } else { 0.0 };
+        self.inverted = false;
     }
 
     fn step(&mut self, action: usize)  {
@@ -238,6 +308,7 @@ impl Env for LinearFunction {
         }
 
         self.depth = self.depth.saturating_sub(1); // Prevent underflow
+        self.maybe_random_invert();
         self.success = self.solved();
         let achieved = if self.success { 1.0 } else { 0.0 };
         self.reward_value = achieved - penalty;
@@ -281,7 +352,7 @@ mod tests {
     fn cx_gate_is_self_inverse() {
         let gateset = vec![Gate::CX(0, 1)];
         let metrics_weights = MetricsWeights::default();
-        let mut env = LinearFunction::new(2, 1, gateset, 2, 8, metrics_weights, true);
+        let mut env = LinearFunction::new(2, 1, gateset, 2, 8, metrics_weights, true, true);
         env.depth = env.max_depth;
 
         env.step(0);
@@ -290,6 +361,20 @@ mod tests {
         env.step(0);
         assert!(env.solved());
         assert!(env.reward() <= 1.0);
+    }
+
+    #[test]
+    fn lfstate_inversion_roundtrip() {
+        let mut state = LFState::new(3);
+        state.cx(0, 1);
+        state.swap(1, 2);
+
+        let original = state.data.clone();
+        state.invert();
+        state.invert();
+
+        assert_eq!(state.data, original, "double inversion should restore the matrix");
+        assert!(!state.solved());
     }
 }
 
@@ -307,6 +392,7 @@ impl PyLinearFunctionEnv {
         depth_slope,
         max_depth,
         metrics_weights=None,
+        add_inverts=None,
         add_perms=None,
     ))]
     pub fn new(
@@ -316,6 +402,7 @@ impl PyLinearFunctionEnv {
         depth_slope: usize,
         max_depth: usize,
         metrics_weights: Option<HashMap<String, f32>>,
+        add_inverts: Option<bool>,
         add_perms: Option<bool>,
     ) -> (Self, PyBaseEnv) {
         let weights = MetricsWeights::from_hashmap(metrics_weights);
@@ -326,6 +413,7 @@ impl PyLinearFunctionEnv {
             depth_slope,
             max_depth,
             weights,
+            add_inverts.unwrap_or(true),
             add_perms.unwrap_or(true),
         );
         let env = Box::new(env);
