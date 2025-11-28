@@ -197,6 +197,7 @@ pub struct Clifford {
     solution: Vec<usize>,
     solution_inv: Vec<usize>,
     inverted: bool,
+    add_perms: bool,
 }
 
 impl Clifford {
@@ -242,6 +243,7 @@ impl Clifford {
             solution: Vec::new(),
             solution_inv: Vec::new(),
             inverted: false,
+            add_perms,
         }
     }
     pub fn solved(&self) -> bool { self.cf.solved() }

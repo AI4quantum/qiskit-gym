@@ -374,7 +374,7 @@ mod tests {
     fn cx_gate_is_self_inverse() {
         let gateset = vec![Gate::CX(0, 1)];
         let metrics_weights = MetricsWeights::default();
-        let mut env = LinearFunction::new(2, 1, gateset, 2, 8, metrics_weights);
+        let mut env = LinearFunction::new(2, 1, gateset, 2, 8, metrics_weights, true);
         env.depth = env.max_depth;
 
         env.step(0);
