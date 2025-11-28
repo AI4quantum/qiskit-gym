@@ -44,6 +44,7 @@ pub struct Permutation {
     metrics_values: MetricsCounts,
     metrics_weights: MetricsWeights,
     reward_value: f32,
+    add_perms: bool,
 }
 
 
@@ -56,10 +57,18 @@ impl Permutation {
         max_depth: usize,
         metrics_weights: MetricsWeights,
         add_inverts: bool,
+        add_perms: bool,
     ) -> Self {
-        println!("Computing perms");
-        let (obs_perms, act_perms) = compute_twists_square(num_qubits, &gateset);
-        println!("Computing perms finshed");
+        // Only compute symmetries if enabled
+        let (obs_perms, act_perms) = if add_perms {
+            println!("Computing perms");
+            let result = compute_twists_square(num_qubits, &gateset);
+            println!("Computing perms finished");
+            result
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
         let metrics = MetricsTracker::new(num_qubits);
         let metrics_values = metrics.snapshot();
         let success = true;
@@ -79,6 +88,7 @@ impl Permutation {
             metrics_values,
             metrics_weights,
             reward_value: 1.0,
+            add_perms,
         }
     }
 
@@ -221,7 +231,7 @@ pub struct PyPermutationEnv;
 #[pymethods]
 impl PyPermutationEnv {
     #[new]
-    #[pyo3(signature = (num_qubits, difficulty, gateset, depth_slope, max_depth, metrics_weights=None, add_inverts=None))]
+    #[pyo3(signature = (num_qubits, difficulty, gateset, depth_slope, max_depth, metrics_weights=None, add_inverts=None, add_perms=None))]
     pub fn new(
         num_qubits: usize,
         difficulty: usize,
@@ -230,10 +240,12 @@ impl PyPermutationEnv {
         max_depth: usize,
         metrics_weights: Option<HashMap<String, f32>>,
         add_inverts: Option<bool>,
+        add_perms: Option<bool>,
     ) -> (Self, PyBaseEnv) {
         let weights = MetricsWeights::from_hashmap(metrics_weights);
         let add_inverts = add_inverts.unwrap_or(false);
-        let env = Permutation::new(num_qubits, difficulty, gateset, depth_slope, max_depth, weights, add_inverts);
+        let add_perms = add_perms.unwrap_or(true);
+        let env = Permutation::new(num_qubits, difficulty, gateset, depth_slope, max_depth, weights, add_inverts, add_perms);
         let env = Box::new(env);
         (PyPermutationEnv, PyBaseEnv { env })
     }

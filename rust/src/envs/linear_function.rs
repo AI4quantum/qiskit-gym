@@ -116,6 +116,7 @@ pub struct LinearFunction {
     metrics_values: MetricsCounts,
     metrics_weights: MetricsWeights,
     reward_value: f32,
+    add_perms: bool,
 }
 
 
@@ -127,10 +128,18 @@ impl LinearFunction {
         depth_slope: usize,
         max_depth: usize,
         metrics_weights: MetricsWeights,
+        add_perms: bool,
     ) -> Self {
         let lf = LFState::new(num_qubits);
         let success = lf.solved();
-        let (obs_perms, act_perms) = compute_twists_square(num_qubits, &gateset);
+
+        // Only compute symmetries if enabled
+        let (obs_perms, act_perms) = if add_perms {
+            compute_twists_square(num_qubits, &gateset)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
         let metrics = MetricsTracker::new(num_qubits);
         let metrics_values = metrics.snapshot();
         LinearFunction {
@@ -147,6 +156,7 @@ impl LinearFunction {
             metrics_values,
             metrics_weights,
             reward_value: if success { 1.0 } else { 0.0 },
+            add_perms,
         }
     }
     pub fn solved(&self) -> bool {
@@ -271,7 +281,7 @@ mod tests {
     fn cx_gate_is_self_inverse() {
         let gateset = vec![Gate::CX(0, 1)];
         let metrics_weights = MetricsWeights::default();
-        let mut env = LinearFunction::new(2, 1, gateset, 2, 8, metrics_weights);
+        let mut env = LinearFunction::new(2, 1, gateset, 2, 8, metrics_weights, true);
         env.depth = env.max_depth;
 
         env.step(0);
@@ -290,13 +300,23 @@ pub struct PyLinearFunctionEnv;
 #[pymethods]
 impl PyLinearFunctionEnv {
     #[new]
+    #[pyo3(signature = (
+        num_qubits,
+        difficulty,
+        gateset,
+        depth_slope,
+        max_depth,
+        metrics_weights=None,
+        add_perms=None,
+    ))]
     pub fn new(
         num_qubits: usize,
         difficulty: usize,
         gateset: Vec<Gate>,
         depth_slope: usize,
         max_depth: usize,
-        metrics_weights: Option<HashMap<String, f32>>
+        metrics_weights: Option<HashMap<String, f32>>,
+        add_perms: Option<bool>,
     ) -> (Self, PyBaseEnv) {
         let weights = MetricsWeights::from_hashmap(metrics_weights);
         let env = LinearFunction::new(
@@ -306,6 +326,7 @@ impl PyLinearFunctionEnv {
             depth_slope,
             max_depth,
             weights,
+            add_perms.unwrap_or(true),
         );
         let env = Box::new(env);
         (PyLinearFunctionEnv, PyBaseEnv { env })

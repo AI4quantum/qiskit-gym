@@ -45,6 +45,7 @@ class BaseSynthesisEnv(ABC):
         max_depth: int = 128,
         metrics_weights: dict[str, float] | None = None,
         add_inverts: bool = False,
+        add_perms: bool = True,
     ):
         if basis_gates is None:
             basis_gates = tuple(cls.allowed_gates)
@@ -76,12 +77,23 @@ class BaseSynthesisEnv(ABC):
             "max_depth": max_depth,
             "metrics_weights": metrics_weights,
             "add_inverts": add_inverts,
+            "add_perms": add_perms,
         }
-        return cls(**config)
+        # Filter config to only include parameters accepted by the class __init__
+        import inspect
+        sig = inspect.signature(cls.__init__)
+        valid_params = set(sig.parameters.keys()) - {'self'}
+        filtered_config = {k: v for k, v in config.items() if k in valid_params}
+        return cls(**filtered_config)
 
     @classmethod
     def from_json(cls, env_config):
-        return cls(**env_config)
+        # Filter config to only include parameters accepted by the class __init__
+        import inspect
+        sig = inspect.signature(cls.__init__)
+        valid_params = set(sig.parameters.keys()) - {'self'}
+        filtered_config = {k: v for k, v in env_config.items() if k in valid_params}
+        return cls(**filtered_config)
 
     @classmethod
     @abstractmethod
@@ -111,6 +123,8 @@ class CliffordGym(CliffordEnv, BaseSynthesisEnv):
         depth_slope: int = 2,
         max_depth: int = 128,
         metrics_weights: dict[str, float] | None = None,
+        add_inverts: bool = True,
+        add_perms: bool = True,
     ):
         super().__init__(**{
             "num_qubits": num_qubits,
@@ -119,6 +133,8 @@ class CliffordGym(CliffordEnv, BaseSynthesisEnv):
             "depth_slope": depth_slope,
             "max_depth": max_depth,
             "metrics_weights": metrics_weights,
+            "add_inverts": add_inverts,
+            "add_perms": add_perms,
         })
 
     def get_state(self, input: QuantumCircuit | Clifford):
@@ -145,6 +161,7 @@ class LinearFunctionGym(LinearFunctionEnv, BaseSynthesisEnv):
         depth_slope: int = 2,
         max_depth: int = 128,
         metrics_weights: dict[str, float] | None = None,
+        add_perms: bool = True,
     ):
         super().__init__(**{
             "num_qubits": num_qubits,
@@ -153,6 +170,7 @@ class LinearFunctionGym(LinearFunctionEnv, BaseSynthesisEnv):
             "depth_slope": depth_slope,
             "max_depth": max_depth,
             "metrics_weights": metrics_weights,
+            "add_perms": add_perms,
         })
     
     def get_state(self, input: QuantumCircuit | LinearFunction):
@@ -182,6 +200,7 @@ class PermutationGym(PermutationEnv, BaseSynthesisEnv):
         max_depth: int = 128,
         metrics_weights: dict[str, float] | None = None,
         add_inverts: bool = False,
+        add_perms: bool = True,
     ):
         super().__init__(**{
             "num_qubits": num_qubits,
@@ -191,6 +210,7 @@ class PermutationGym(PermutationEnv, BaseSynthesisEnv):
             "max_depth": max_depth,
             "metrics_weights": metrics_weights,
             "add_inverts": add_inverts,
+            "add_perms": add_perms,
         })
 
     def get_state(self, input: QuantumCircuit | PermutationGate | Iterable[int]):

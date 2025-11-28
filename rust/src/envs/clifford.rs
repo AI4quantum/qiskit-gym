@@ -194,6 +194,7 @@ pub struct Clifford {
     reward_value: f32,
     add_inverts: bool,
     inverted: bool,
+    add_perms: bool,
 }
 
 impl Clifford {
@@ -205,10 +206,18 @@ impl Clifford {
         max_depth: usize,
         metrics_weights: MetricsWeights,
         add_inverts: bool,
+        add_perms: bool,
     ) -> Self {
         let cf = CFState::new(num_qubits);
         let success = cf.solved();
-        let (obs_perms, act_perms) = compute_twists_clifford(num_qubits, &gateset);
+
+        // Only compute symmetries if enabled
+        let (obs_perms, act_perms) = if add_perms {
+            compute_twists_clifford(num_qubits, &gateset)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
         let metrics = MetricsTracker::new(num_qubits);
         let metrics_values = metrics.snapshot();
         Clifford {
@@ -227,6 +236,7 @@ impl Clifford {
             reward_value: if success { 1.0 } else { 0.0 },
             add_inverts,
             inverted: false,
+            add_perms,
         }
     }
     pub fn solved(&self) -> bool { self.cf.solved() }
@@ -365,6 +375,7 @@ impl PyCliffordEnv {
         max_depth,
         metrics_weights=None,
         add_inverts=None,
+        add_perms=None,
     ))]
     pub fn new(
         num_qubits: usize,
@@ -374,6 +385,7 @@ impl PyCliffordEnv {
         max_depth: usize,
         metrics_weights: Option<HashMap<String, f32>>,
         add_inverts: Option<bool>,
+        add_perms: Option<bool>,
     ) -> (Self, PyBaseEnv) {
         let weights = MetricsWeights::from_hashmap(metrics_weights);
         let env = Clifford::new(
@@ -384,6 +396,7 @@ impl PyCliffordEnv {
             max_depth,
             weights,
             add_inverts.unwrap_or(true),
+            add_perms.unwrap_or(true),
         );
         let env = Box::new(env);
         (PyCliffordEnv, PyBaseEnv { env })
