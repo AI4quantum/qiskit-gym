@@ -278,6 +278,7 @@ impl Env for LinearFunction {
 
     fn set_state(&mut self, state: Vec<i64>) {
         self.lf.data = state.iter().map(|&x| x>0).collect();
+        self.lf.invert();
         self.depth = self.max_depth;
         self.reset_internals();
     }
@@ -374,7 +375,7 @@ mod tests {
     fn cx_gate_is_self_inverse() {
         let gateset = vec![Gate::CX(0, 1)];
         let metrics_weights = MetricsWeights::default();
-        let mut env = LinearFunction::new(2, 1, gateset, 2, 8, metrics_weights, true);
+        let mut env = LinearFunction::new(2, 1, gateset, 2, 8, metrics_weights, true, true);
         env.depth = env.max_depth;
 
         env.step(0);
@@ -383,6 +384,20 @@ mod tests {
         env.step(0);
         assert!(env.solved());
         assert!(env.reward() <= 1.0);
+    }
+
+    #[test]
+    fn lfstate_inversion_roundtrip() {
+        let mut state = LFState::new(3);
+        state.cx(0, 1);
+        state.swap(1, 2);
+
+        let original = state.data.clone();
+        state.invert();
+        state.invert();
+
+        assert_eq!(state.data, original, "double inversion should restore the matrix");
+        assert!(!state.solved());
     }
 }
 
