@@ -14,6 +14,10 @@ that they have been altered from the originals.
 use std::collections::{HashMap, HashSet};
 
 use crate::envs::common::Gate;
+use petgraph::algo::isomorphism::subgraph_isomorphisms_iter;
+use petgraph::graph::Graph;
+use petgraph::visit::NodeIndexable;
+use petgraph::Directed;
 
 #[derive(Hash, Eq, PartialEq, Clone, Copy)]
 enum GateKind {
@@ -108,32 +112,7 @@ fn all_permutations(num_qubits: usize) -> Vec<Vec<usize>> {
     results
 }
 
-#[derive(Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
-struct NodeSignature {
-    degree: usize,
-    neighbor_degrees: Vec<usize>,
-}
-
-impl NodeSignature {
-    fn new(node: usize, degrees: &[usize], adjacency: &[Vec<bool>]) -> Self {
-        let mut neighbor_degrees: Vec<usize> = adjacency[node]
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, &connected)| if connected { Some(degrees[idx]) } else { None })
-            .collect();
-        neighbor_degrees.sort_unstable();
-        Self {
-            degree: degrees[node],
-            neighbor_degrees,
-        }
-    }
-}
-
-fn enumerate_automorphisms(
-    adjacency: &[Vec<bool>],
-    has_edge: bool,
-    signatures: &[NodeSignature],
-) -> Vec<Vec<usize>> {
+fn compute_automorphisms(adjacency: &[Vec<bool>], has_edge: bool) -> Vec<Vec<usize>> {
     let n = adjacency.len();
     if n == 0 {
         return vec![Vec::new()];
@@ -143,84 +122,57 @@ fn enumerate_automorphisms(
         return all_permutations(n);
     }
 
-    let mut nodes_order: Vec<usize> = (0..n).collect();
-    nodes_order.sort_by(|&a, &b| signatures[a].cmp(&signatures[b]));
+    // Build a directed graph with symmetric edges and use petgraph's VF2 enumerator.
+    let mut graph = Graph::<usize, (), Directed>::new();
+    let mut nodes = Vec::with_capacity(n);
+    for node in 0..n {
+        nodes.push(graph.add_node(node));
+    }
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if adjacency[i][j] {
+                graph.add_edge(nodes[i], nodes[j], ());
+                graph.add_edge(nodes[j], nodes[i], ());
+            }
+        }
+    }
 
-    let mut perm = vec![usize::MAX; n];
-    let mut used = vec![false; n];
-    let mut results = Vec::new();
+    let mut results: Vec<Vec<usize>> = Vec::new();
+    let mut node_match = |_: &usize, _: &usize| true;
+    let mut edge_match = |_: &(), _: &()| true;
 
-    backtrack_automorphisms(
-        0,
-        &nodes_order,
-        signatures,
-        adjacency,
-        &mut perm,
-        &mut used,
-        &mut results,
-    );
+    // Use &&graph so G0/G1 are `&Graph`, which implement the required traits for VF2.
+    let graph_ref = &graph;
+    if let Some(iter) =
+        subgraph_isomorphisms_iter(&graph_ref, &graph_ref, &mut node_match, &mut edge_match)
+    {
+        for mapping in iter {
+            if mapping.len() != n {
+                continue;
+            }
+            // mapping indices are compact node indices; translate back to node labels
+            let mut perm = vec![usize::MAX; n];
+            for (from_idx, to_idx) in mapping.into_iter().enumerate() {
+                let from_node = graph.from_index(from_idx);
+                let to_node = graph.from_index(to_idx);
+                let from_label = graph.node_weight(from_node).copied().unwrap_or(0);
+                let to_label = graph.node_weight(to_node).copied().unwrap_or(0);
+                perm[from_label] = to_label;
+            }
+            if perm.iter().any(|&v| v == usize::MAX) {
+                continue;
+            }
+            results.push(perm);
+        }
+    }
 
     if results.is_empty() {
         results.push(identity_perm(n));
     }
 
+    results.sort();
+    results.dedup();
     results
-}
-
-fn backtrack_automorphisms(
-    idx: usize,
-    nodes_order: &[usize],
-    signatures: &[NodeSignature],
-    adjacency: &[Vec<bool>],
-    perm: &mut Vec<usize>,
-    used: &mut Vec<bool>,
-    results: &mut Vec<Vec<usize>>,
-) {
-    if idx == nodes_order.len() {
-        results.push(perm.clone());
-        return;
-    }
-
-    let node_from = nodes_order[idx];
-    let target_signature = &signatures[node_from];
-    let n = adjacency.len();
-
-    for node_to in 0..n {
-        if used[node_to] || &signatures[node_to] != target_signature {
-            continue;
-        }
-
-        let mut consistent = true;
-        for prev_idx in 0..idx {
-            let prev_from = nodes_order[prev_idx];
-            let prev_to = perm[prev_from];
-            if prev_to == usize::MAX {
-                continue;
-            }
-            if adjacency[node_from][prev_from] != adjacency[node_to][prev_to] {
-                consistent = false;
-                break;
-            }
-        }
-
-        if !consistent {
-            continue;
-        }
-
-        perm[node_from] = node_to;
-        used[node_to] = true;
-        backtrack_automorphisms(
-            idx + 1,
-            nodes_order,
-            signatures,
-            adjacency,
-            perm,
-            used,
-            results,
-        );
-        used[node_to] = false;
-        perm[node_from] = usize::MAX;
-    }
 }
 
 fn build_action_perm(
@@ -283,15 +235,7 @@ where
         }
     }
 
-    let degrees: Vec<usize> = adjacency
-        .iter()
-        .map(|row| row.iter().filter(|&&edge| edge).count())
-        .collect();
-    let signatures: Vec<NodeSignature> = (0..num_qubits)
-        .map(|idx| NodeSignature::new(idx, &degrees, &adjacency))
-        .collect();
-
-    let automorphisms = enumerate_automorphisms(&adjacency, has_edge, &signatures);
+    let automorphisms = compute_automorphisms(&adjacency, has_edge);
 
     let mut seen: HashSet<Vec<usize>> = HashSet::new();
     let mut obs_perms: Vec<Vec<usize>> = Vec::new();
