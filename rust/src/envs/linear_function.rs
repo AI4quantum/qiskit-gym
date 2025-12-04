@@ -169,7 +169,6 @@ pub struct LinearFunction {
     reward_value: f32,
     add_inverts: bool,
     inverted: bool,
-    add_perms: bool,
 }
 
 
@@ -212,7 +211,6 @@ impl LinearFunction {
             reward_value: if success { 1.0 } else { 0.0 },
             add_inverts,
             inverted: false,
-            add_perms,
         }
     }
     pub fn solved(&self) -> bool {
@@ -254,12 +252,11 @@ impl Env for LinearFunction {
 
     fn set_state(&mut self, state: Vec<i64>) {
         self.lf.data = state.iter().map(|&x| x>0).collect();
-        self.lf.invert();
         self.depth = self.max_depth;
         self.success = self.solved();
         self.metrics.reset();
         self.metrics_values = self.metrics.snapshot();
-        //self.reward_value = if self.success { 1.0 } else { 0.0 };
+        self.reward_value = if self.success { 1.0 } else { 0.0 };
         self.inverted = false;
     }
 

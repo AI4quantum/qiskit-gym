@@ -54,12 +54,6 @@ impl CFState {
         self.data[self.index(row, col)]
     }
 
-    #[inline]
-    fn set(&mut self, row: usize, col: usize, val: bool) {
-        let idx = self.index(row, col);
-        self.data[idx] = val;
-    }
-
     // Row ops over GF(2)
     fn row_xor(&mut self, dest: usize, src: usize) {
         if dest == src { return; }
@@ -194,7 +188,6 @@ pub struct Clifford {
     reward_value: f32,
     add_inverts: bool,
     inverted: bool,
-    add_perms: bool,
 }
 
 impl Clifford {
@@ -236,7 +229,6 @@ impl Clifford {
             reward_value: if success { 1.0 } else { 0.0 },
             add_inverts,
             inverted: false,
-            add_perms,
         }
     }
     pub fn solved(&self) -> bool { self.cf.solved() }

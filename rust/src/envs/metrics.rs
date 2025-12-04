@@ -86,11 +86,12 @@ impl MetricsTracker {
         }
 
         self.n_gates += 1;
+        let gate_layer = self.last_gates[target] + 1;
+        self.last_gates[target] = gate_layer;
 
-        if self.last_gates[target] >= 0 {
-            self.layers.insert(self.last_gates[target] as usize);
+        if gate_layer >= 0 {
+            self.layers.insert(gate_layer as usize);
         }
-        self.last_gates[target] += 1;
     }
 
     fn cx(&mut self, control: usize, target: usize) {
@@ -181,4 +182,3 @@ impl MetricsWeights {
         weights
     }
 }
-

@@ -44,7 +44,7 @@ class BaseSynthesisEnv(ABC):
         depth_slope: int = 2,
         max_depth: int = 128,
         metrics_weights: dict[str, float] | None = None,
-        add_inverts: bool = False,
+        add_inverts: bool = True,
         add_perms: bool = True,
     ):
         if basis_gates is None:

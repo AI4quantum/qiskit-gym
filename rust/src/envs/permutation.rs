@@ -44,7 +44,6 @@ pub struct Permutation {
     metrics_values: MetricsCounts,
     metrics_weights: MetricsWeights,
     reward_value: f32,
-    add_perms: bool,
 }
 
 
@@ -61,10 +60,7 @@ impl Permutation {
     ) -> Self {
         // Only compute symmetries if enabled
         let (obs_perms, act_perms) = if add_perms {
-            println!("Computing perms");
-            let result = compute_twists_square(num_qubits, &gateset);
-            println!("Computing perms finished");
-            result
+            compute_twists_square(num_qubits, &gateset)
         } else {
             (Vec::new(), Vec::new())
         };
@@ -88,7 +84,6 @@ impl Permutation {
             metrics_values,
             metrics_weights,
             reward_value: 1.0,
-            add_perms,
         }
     }
 
@@ -100,6 +95,18 @@ impl Permutation {
             inv[val] = i;
         }
         inv
+    }
+
+    /// Randomly invert the permutation with 50% probability when enabled.
+    fn maybe_random_invert(&mut self) {
+        if !self.add_inverts {
+            return;
+        }
+
+        let mut rng = rand::thread_rng();
+        if rng.gen_bool(0.5) {
+            self.state = Self::invert_perm(&self.state);
+        }
     }
 
     pub fn solved(&self) -> bool {
@@ -187,13 +194,7 @@ impl Env for Permutation {
             }
         }
 
-        // Randomly invert the permutation with 50% probability during training
-        if self.add_inverts {
-            let mut rng = rand::thread_rng();
-            if rng.gen::<f32>() > 0.5 {
-                self.state = Self::invert_perm(&self.state);
-            }
-        }
+        self.maybe_random_invert();
 
         self.depth = self.depth.saturating_sub(1); // Prevent underflow
         self.success = self.solved();

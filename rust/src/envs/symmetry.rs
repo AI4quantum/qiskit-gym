@@ -77,6 +77,37 @@ fn identity_perm(num_qubits: usize) -> Vec<usize> {
     (0..num_qubits).collect()
 }
 
+fn all_permutations(num_qubits: usize) -> Vec<Vec<usize>> {
+    let mut perm: Vec<usize> = (0..num_qubits).collect();
+    let mut results = Vec::new();
+
+    fn heap_permute(k: usize, perm: &mut Vec<usize>, results: &mut Vec<Vec<usize>>) {
+        if k == 1 {
+            results.push(perm.clone());
+            return;
+        }
+
+        heap_permute(k - 1, perm, results);
+
+        for i in 0..(k - 1) {
+            if k % 2 == 0 {
+                perm.swap(i, k - 1);
+            } else {
+                perm.swap(0, k - 1);
+            }
+            heap_permute(k - 1, perm, results);
+        }
+    }
+
+    if num_qubits == 0 {
+        results.push(Vec::new());
+    } else {
+        heap_permute(num_qubits, &mut perm, &mut results);
+    }
+
+    results
+}
+
 #[derive(Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 struct NodeSignature {
     degree: usize,
@@ -109,7 +140,7 @@ fn enumerate_automorphisms(
     }
 
     if !has_edge {
-        return vec![identity_perm(n)];
+        return all_permutations(n);
     }
 
     let mut nodes_order: Vec<usize> = (0..n).collect();
