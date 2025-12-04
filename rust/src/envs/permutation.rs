@@ -131,6 +131,18 @@ impl Permutation {
         inv
     }
 
+    /// Randomly invert the permutation with 50% probability when enabled.
+    fn maybe_random_invert(&mut self) {
+        if !self.add_inverts {
+            return;
+        }
+
+        let mut rng = rand::thread_rng();
+        if rng.gen_bool(0.5) {
+            self.state = Self::invert_perm(&self.state);
+        }
+    }
+
     pub fn solved(&self) -> bool {
         for i in 0..self.state.len() {
             if self.state[i] != i {return false}

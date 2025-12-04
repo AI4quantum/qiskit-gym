@@ -278,7 +278,6 @@ impl Env for LinearFunction {
 
     fn set_state(&mut self, state: Vec<i64>) {
         self.lf.data = state.iter().map(|&x| x>0).collect();
-        self.lf.invert();
         self.depth = self.max_depth;
         self.reset_internals();
     }

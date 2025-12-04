@@ -54,12 +54,6 @@ impl CFState {
         self.data[self.index(row, col)]
     }
 
-    #[inline]
-    fn set(&mut self, row: usize, col: usize, val: bool) {
-        let idx = self.index(row, col);
-        self.data[idx] = val;
-    }
-
     // Row ops over GF(2)
     fn row_xor(&mut self, dest: usize, src: usize) {
         if dest == src { return; }
@@ -197,7 +191,6 @@ pub struct Clifford {
     solution: Vec<usize>,
     solution_inv: Vec<usize>,
     inverted: bool,
-    add_perms: bool,
 }
 
 impl Clifford {
@@ -243,7 +236,6 @@ impl Clifford {
             solution: Vec::new(),
             solution_inv: Vec::new(),
             inverted: false,
-            add_perms,
         }
     }
     pub fn solved(&self) -> bool { self.cf.solved() }
