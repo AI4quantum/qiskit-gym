@@ -64,7 +64,7 @@ impl Permutation {
         } else {
             (Vec::new(), Vec::new())
         };
-
+        
         let metrics = MetricsTracker::new(num_qubits);
         let metrics_values = metrics.snapshot();
         let success = true;
@@ -244,7 +244,7 @@ impl PyPermutationEnv {
         add_perms: Option<bool>,
     ) -> (Self, PyBaseEnv) {
         let weights = MetricsWeights::from_hashmap(metrics_weights);
-        let add_inverts = add_inverts.unwrap_or(false);
+        let add_inverts = add_inverts.unwrap_or(true);
         let add_perms = add_perms.unwrap_or(true);
         let env = Permutation::new(num_qubits, difficulty, gateset, depth_slope, max_depth, weights, add_inverts, add_perms);
         let env = Box::new(env);
