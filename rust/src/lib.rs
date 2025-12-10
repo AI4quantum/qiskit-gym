@@ -14,6 +14,7 @@ that they have been altered from the originals.
 use pyo3::prelude::*;
 pub mod envs;
 
+use crate::envs::channel3::PyChannel3Env;
 use crate::envs::clifford::PyCliffordEnv;
 use crate::envs::linear_function::PyLinearFunctionEnv;
 use crate::envs::permutation::PyPermutationEnv;
@@ -24,5 +25,6 @@ fn qiskit_gym_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCliffordEnv>()?;
     m.add_class::<PyLinearFunctionEnv>()?;
     m.add_class::<PyPermutationEnv>()?;
+    m.add_class::<PyChannel3Env>()?;
     Ok(())
 }
