@@ -168,6 +168,9 @@ pub struct LinearFunction {
     metrics_weights: MetricsWeights,
     reward_value: f32,
     add_inverts: bool,
+    track_solution: bool,
+    solution: Vec<usize>,
+    solution_inv: Vec<usize>,
     inverted: bool,
 }
 
@@ -182,6 +185,7 @@ impl LinearFunction {
         metrics_weights: MetricsWeights,
         add_inverts: bool,
         add_perms: bool,
+        track_solution: bool,
     ) -> Self {
         let lf = LFState::new(num_qubits);
         let success = lf.solved();
@@ -210,6 +214,9 @@ impl LinearFunction {
             metrics_weights,
             reward_value: if success { 1.0 } else { 0.0 },
             add_inverts,
+            track_solution,
+            solution: Vec::new(),
+            solution_inv: Vec::new(),
             inverted: false,
         }
     }
@@ -224,6 +231,14 @@ impl LinearFunction {
         if rand::thread_rng().gen_bool(0.5) {
             self.lf.invert();
             self.inverted = !self.inverted;
+        }
+    }
+
+    fn apply_gate_to_state(&mut self, gate: &Gate) {
+        match gate {
+            &Gate::CX(q1, q2) => self.lf.cx(q1, q2),
+            &Gate::SWAP(q1, q2) => self.lf.swap(q1, q2),
+            _ => {}
         }
     }
 
@@ -263,20 +278,15 @@ impl Env for LinearFunction {
     fn reset(&mut self) {
         // Create an identity matrix for the initial 'lf' state
         self.lf = LFState::new(self.lf.size);
-        self.depth = self.max_depth;
-        self.success = self.solved();
-        self.metrics.reset();
-        self.metrics_values = self.metrics.snapshot();
-        self.reward_value = if self.success { 1.0 } else { 0.0 };
-        self.inverted = false;
-
         let mut rng = rand::thread_rng();
         let action_range = Uniform::new(0, self.num_actions());
 
         // Apply random actions based on the difficulty
         for _ in 0..self.difficulty {
             let action = action_range.sample(&mut rng);
-            self.step(action);
+            if let Some(gate) = self.gateset.get(action).cloned() {
+                self.apply_gate_to_state(&gate);
+            }
         }
         self.depth = (self.depth_slope * self.difficulty).min(self.max_depth);
         self.success = self.solved();
@@ -289,18 +299,21 @@ impl Env for LinearFunction {
     fn step(&mut self, action: usize)  {
         let mut penalty = 0.0f32;
 
-        if action < self.gateset.len() {
-            let gate = &self.gateset[action];
+         if let Some(gate) = self.gateset.get(action).cloned() {
             let previous = self.metrics_values.clone();
-            self.metrics.apply_gate(gate);
+            self.metrics.apply_gate(&gate);
             let new_metrics = self.metrics.snapshot();
             penalty = new_metrics.weighted_delta(&previous, &self.metrics_weights);
             self.metrics_values = new_metrics;
 
-            match gate {
-                &Gate::CX(q1, q2) => self.lf.cx(q1, q2),
-                &Gate::SWAP(q1, q2) => self.lf.swap(q1, q2),
-                _ => {}
+            self.apply_gate_to_state(&gate);
+        }
+
+        if self.track_solution {
+           if self.inverted {
+               self.solution_inv.push(action);
+            } else {
+                self.solution.push(action);
             }
         }
 
@@ -337,9 +350,62 @@ impl Env for LinearFunction {
     fn twists(&self) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
         (self.obs_perms.clone(), self.act_perms.clone())
     }
+
+    fn track_solution(&self) -> bool { self.track_solution }
+
+    fn solution(&self) -> Vec<usize> {
+        let mut out = Vec::with_capacity(self.solution.len() + self.solution_inv.len());
+        out.extend_from_slice(&self.solution);
+        out.extend(self.solution_inv.iter().rev().copied());
+        out
+    }
 }
 
-// metrics implementation shared via crate::envs::metrics
+#[pyclass(name="LinearFunctionEnv", extends=PyBaseEnv)]
+pub struct PyLinearFunctionEnv;
+
+#[pymethods]
+impl PyLinearFunctionEnv {
+    #[new]
+    #[pyo3(signature = (
+        num_qubits,
+        difficulty,
+        gateset,
+        depth_slope,
+        max_depth,
+        metrics_weights=None,
+        add_inverts=None,
+        add_perms=None,
+        track_solution=None,
+    ))]
+    pub fn new(
+        num_qubits: usize,
+        difficulty: usize,
+        gateset: Vec<Gate>,
+        depth_slope: usize,
+        max_depth: usize,
+        metrics_weights: Option<HashMap<String, f32>>,
+        add_inverts: Option<bool>,
+        add_perms: Option<bool>,
+        track_solution: Option<bool>,
+    ) -> (Self, PyBaseEnv) {
+        let weights = MetricsWeights::from_hashmap(metrics_weights);
+        let env = LinearFunction::new(
+            num_qubits,
+            difficulty,
+            gateset,
+            depth_slope,
+            max_depth,
+            weights,
+            add_inverts.unwrap_or(true),
+            add_perms.unwrap_or(true),
+            track_solution.unwrap_or(true)
+        );
+        let env = Box::new(env);
+        (PyLinearFunctionEnv, PyBaseEnv { env })
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -349,7 +415,7 @@ mod tests {
     fn cx_gate_is_self_inverse() {
         let gateset = vec![Gate::CX(0, 1)];
         let metrics_weights = MetricsWeights::default();
-        let mut env = LinearFunction::new(2, 1, gateset, 2, 8, metrics_weights, true, true);
+        let mut env = LinearFunction::new(2, 1, gateset, 2, 8, metrics_weights, true, true, true);
         env.depth = env.max_depth;
 
         env.step(0);
@@ -372,48 +438,5 @@ mod tests {
 
         assert_eq!(state.data, original, "double inversion should restore the matrix");
         assert!(!state.solved());
-    }
-}
-
-
-#[pyclass(name="LinearFunctionEnv", extends=PyBaseEnv)]
-pub struct PyLinearFunctionEnv;
-
-#[pymethods]
-impl PyLinearFunctionEnv {
-    #[new]
-    #[pyo3(signature = (
-        num_qubits,
-        difficulty,
-        gateset,
-        depth_slope,
-        max_depth,
-        metrics_weights=None,
-        add_inverts=None,
-        add_perms=None,
-    ))]
-    pub fn new(
-        num_qubits: usize,
-        difficulty: usize,
-        gateset: Vec<Gate>,
-        depth_slope: usize,
-        max_depth: usize,
-        metrics_weights: Option<HashMap<String, f32>>,
-        add_inverts: Option<bool>,
-        add_perms: Option<bool>,
-    ) -> (Self, PyBaseEnv) {
-        let weights = MetricsWeights::from_hashmap(metrics_weights);
-        let env = LinearFunction::new(
-            num_qubits,
-            difficulty,
-            gateset,
-            depth_slope,
-            max_depth,
-            weights,
-            add_inverts.unwrap_or(true),
-            add_perms.unwrap_or(true),
-        );
-        let env = Box::new(env);
-        (PyLinearFunctionEnv, PyBaseEnv { env })
     }
 }

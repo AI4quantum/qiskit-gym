@@ -39,11 +39,15 @@ pub struct Permutation {
     pub max_depth: usize,
     pub obs_perms: Vec<Vec<usize>>,
     pub act_perms: Vec<Vec<usize>>,
-    pub add_inverts: bool,
     metrics: MetricsTracker,
     metrics_values: MetricsCounts,
     metrics_weights: MetricsWeights,
     reward_value: f32,
+    pub add_inverts: bool,
+    track_solution: bool,
+    solution: Vec<usize>,
+    solution_inv: Vec<usize>,    
+    inverted: bool,
 }
 
 
@@ -57,6 +61,7 @@ impl Permutation {
         metrics_weights: MetricsWeights,
         add_inverts: bool,
         add_perms: bool,
+        track_solution: bool,
     ) -> Self {
         // Only compute symmetries if enabled
         let (obs_perms, act_perms) = if add_perms {
@@ -79,11 +84,15 @@ impl Permutation {
             max_depth,
             obs_perms,
             act_perms,
-            add_inverts,
             metrics,
             metrics_values,
             metrics_weights,
             reward_value: 1.0,
+            add_inverts,
+            track_solution,
+            solution: Vec::new(),
+            solution_inv: Vec::new(),
+            inverted: false,
         }
     }
 
@@ -106,6 +115,7 @@ impl Permutation {
         let mut rng = rand::thread_rng();
         if rng.gen_bool(0.5) {
             self.state = Self::invert_perm(&self.state);
+            self.inverted = !self.inverted;
         }
     }
 
@@ -151,30 +161,30 @@ impl Env for Permutation {
         self.metrics.reset();
         self.metrics_values = self.metrics.snapshot();
         self.reward_value = if self.success { 1.0 } else { 0.0 };
+        self.inverted = false;
     }
 
     fn reset(&mut self) {
         // Reset the state to the target
         self.state = (0..self.num_qubits).collect();
-        self.depth = self.max_depth;
-        self.success = self.solved();
-        self.metrics.reset();
-        self.metrics_values = self.metrics.snapshot();
-        self.reward_value = if self.success { 1.0 } else { 0.0 };
-
         let mut rng = rand::thread_rng();
         let action_range = Uniform::new(0, self.num_actions());
 
         // Apply random actions based on the difficulty
         for _ in 0..self.difficulty {
             let action = action_range.sample(&mut rng);
-            self.step(action);
+            let gate = &self.gateset[action];
+            match gate {
+                Gate::SWAP(q1, q2) => (self.state[*q2], self.state[*q1]) = (self.state[*q1], self.state[*q2]),
+                _ => {}
+            }
         }
         self.depth = (self.depth_slope * self.difficulty).min(self.max_depth);
         self.success = self.solved();
         self.metrics.reset();
         self.metrics_values = self.metrics.snapshot();
         self.reward_value = if self.success { 1.0 } else { 0.0 };
+        self.inverted = false;
     }
 
     fn step(&mut self, action: usize)  {
@@ -191,6 +201,14 @@ impl Env for Permutation {
             match gate {
                 Gate::SWAP(q1, q2) => (self.state[*q2], self.state[*q1]) = (self.state[*q1], self.state[*q2]),
                 _ => {}
+            }
+
+            if self.track_solution {
+               if self.inverted {
+                   self.solution_inv.push(action);
+                } else {
+                    self.solution.push(action);
+                }
             }
         }
 
@@ -223,6 +241,15 @@ impl Env for Permutation {
     fn twists(&self) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
         (self.obs_perms.clone(), self.act_perms.clone())
     }
+
+    fn track_solution(&self) -> bool { self.track_solution }
+
+    fn solution(&self) -> Vec<usize> {
+        let mut out = Vec::with_capacity(self.solution.len() + self.solution_inv.len());
+        out.extend_from_slice(&self.solution);
+        out.extend(self.solution_inv.iter().rev().copied());
+        out
+    }
 }
 
 
@@ -232,7 +259,17 @@ pub struct PyPermutationEnv;
 #[pymethods]
 impl PyPermutationEnv {
     #[new]
-    #[pyo3(signature = (num_qubits, difficulty, gateset, depth_slope, max_depth, metrics_weights=None, add_inverts=None, add_perms=None))]
+    #[pyo3(signature = (
+        num_qubits,
+        difficulty,
+        gateset,
+        depth_slope,
+        max_depth,
+        metrics_weights=None,
+        add_inverts=None,
+        add_perms=None,
+        track_solution=None,
+    ))]
     pub fn new(
         num_qubits: usize,
         difficulty: usize,
@@ -242,11 +279,20 @@ impl PyPermutationEnv {
         metrics_weights: Option<HashMap<String, f32>>,
         add_inverts: Option<bool>,
         add_perms: Option<bool>,
+        track_solution: Option<bool>,
     ) -> (Self, PyBaseEnv) {
         let weights = MetricsWeights::from_hashmap(metrics_weights);
-        let add_inverts = add_inverts.unwrap_or(true);
-        let add_perms = add_perms.unwrap_or(true);
-        let env = Permutation::new(num_qubits, difficulty, gateset, depth_slope, max_depth, weights, add_inverts, add_perms);
+        let env = Permutation::new(
+            num_qubits,
+            difficulty,
+            gateset,
+            depth_slope,
+            max_depth,
+            weights,
+            add_inverts.unwrap_or(true),
+            add_perms.unwrap_or(true),
+            track_solution.unwrap_or(true)
+        );
         let env = Box::new(env);
         (PyPermutationEnv, PyBaseEnv { env })
     }

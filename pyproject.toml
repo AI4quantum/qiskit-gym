@@ -18,7 +18,7 @@ dynamic = ["version"]
 dependencies = [
   "qiskit>=2.1",
   "gymnasium",
-  "twisterl~=0.3.0",
+  "twisterl~=0.4.1",
 ]
 
 

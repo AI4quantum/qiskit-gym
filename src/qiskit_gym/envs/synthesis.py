@@ -100,6 +100,8 @@ class BaseSynthesisEnv(ABC):
     def get_state(cls, input):
         pass
 
+    def post_process_synthesis(self, synth_circuit: QuantumCircuit, input_state):
+        return synth_circuit
 
 # ---------------------------------------
 # ------------- Env classes -------------
@@ -110,6 +112,22 @@ from qiskit.quantum_info import Clifford
 
 CliffordEnv = gym_adapter(qiskit_gym_rs.CliffordEnv)
 
+def _solve_phases(clifford_cpy):
+    num_qubits = clifford_cpy.num_qubits
+    out = QuantumCircuit(num_qubits)
+
+    # Add the phases (Pauli gates) to the Clifford circuit
+    for qubit in range(num_qubits):
+        stab = clifford_cpy.stab_phase[qubit]
+        destab = clifford_cpy.destab_phase[qubit]
+        if destab and stab:
+            out.y(qubit)
+        elif not destab and stab:
+            out.x(qubit)
+        elif destab and not stab:
+            out.z(qubit)
+
+    return out
 
 class CliffordGym(CliffordEnv, BaseSynthesisEnv):
     cls_name = "CliffordEnv"
@@ -125,6 +143,7 @@ class CliffordGym(CliffordEnv, BaseSynthesisEnv):
         metrics_weights: dict[str, float] | None = None,
         add_inverts: bool = True,
         add_perms: bool = True,
+        track_solution: bool = True,
     ):
         super().__init__(**{
             "num_qubits": num_qubits,
@@ -135,12 +154,21 @@ class CliffordGym(CliffordEnv, BaseSynthesisEnv):
             "metrics_weights": metrics_weights,
             "add_inverts": add_inverts,
             "add_perms": add_perms,
+            "track_solution": track_solution,
         })
 
     def get_state(self, input: QuantumCircuit | Clifford):
         if isinstance(input, QuantumCircuit):
             input = Clifford(input)
         return input.adjoint().tableau[:, :-1].T.flatten().astype(int).tolist()
+    
+    def post_process_synthesis(self, synth_circuit: QuantumCircuit, input):
+        synth_circuit = synth_circuit.inverse()
+        if isinstance(input, QuantumCircuit):
+            input = Clifford(input)
+        dcliff = Clifford(synth_circuit).compose(input)
+        out = _solve_phases(dcliff).compose(synth_circuit).inverse()
+        return out
 
 
 # ------------- Linear Function -------------
@@ -163,6 +191,7 @@ class LinearFunctionGym(LinearFunctionEnv, BaseSynthesisEnv):
         metrics_weights: dict[str, float] | None = None,
         add_inverts: bool = True,
         add_perms: bool = True,
+        track_solution: bool = True,
     ):
         super().__init__(**{
             "num_qubits": num_qubits,
@@ -173,15 +202,15 @@ class LinearFunctionGym(LinearFunctionEnv, BaseSynthesisEnv):
             "metrics_weights": metrics_weights,
             "add_inverts": add_inverts,
             "add_perms": add_perms,
+            "track_solution": track_solution,
         })
     
     def get_state(self, input: QuantumCircuit | LinearFunction):
-        if isinstance(input, QuantumCircuit):
-            input = LinearFunction(input)
-        elif not isinstance(input, LinearFunction):
-            input = LinearFunction(Clifford(input))
+        # This returns the inverse permutation to get the right 
+        # synthesized circuit at output, instead of its inverse.
+        input = LinearFunction(Clifford(input).adjoint())
         return np.array(input.linear).flatten().astype(int).tolist()
-
+        
 
 # ------------- Permutation -------------
 from qiskit.circuit.library.generalized_gates import PermutationGate
@@ -203,6 +232,7 @@ class PermutationGym(PermutationEnv, BaseSynthesisEnv):
         metrics_weights: dict[str, float] | None = None,
         add_inverts: bool = True,
         add_perms: bool = True,
+        track_solution: bool = True,
     ):
         super().__init__(**{
             "num_qubits": num_qubits,
@@ -213,6 +243,7 @@ class PermutationGym(PermutationEnv, BaseSynthesisEnv):
             "metrics_weights": metrics_weights,
             "add_inverts": add_inverts,
             "add_perms": add_perms,
+            "track_solution": track_solution,
         })
 
     def get_state(self, input: QuantumCircuit | PermutationGate | Iterable[int]):
@@ -221,6 +252,8 @@ class PermutationGym(PermutationEnv, BaseSynthesisEnv):
         elif isinstance(input, PermutationGate):
             input = input.pattern
 
+        # This returns the inverse permutation to get the right 
+        # synthesized circuit at output, instead of its inverse.
         return np.argsort(np.array(input)).astype(int).tolist()
 
 

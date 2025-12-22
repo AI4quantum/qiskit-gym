@@ -193,6 +193,9 @@ pub struct Clifford {
     metrics_weights: MetricsWeights,
     reward_value: f32,
     add_inverts: bool,
+    track_solution: bool,
+    solution: Vec<usize>,
+    solution_inv: Vec<usize>,
     inverted: bool,
 }
 
@@ -206,6 +209,7 @@ impl Clifford {
         metrics_weights: MetricsWeights,
         add_inverts: bool,
         add_perms: bool,
+        track_solution: bool,
     ) -> Self {
         let cf = CFState::new(num_qubits);
         let success = cf.solved();
@@ -234,6 +238,9 @@ impl Clifford {
             metrics_weights,
             reward_value: if success { 1.0 } else { 0.0 },
             add_inverts,
+            track_solution,
+            solution: Vec::new(),
+            solution_inv: Vec::new(),
             inverted: false,
         }
     }
@@ -290,12 +297,6 @@ impl Env for Clifford {
 
     fn reset(&mut self) {
         self.cf = CFState::new(self.cf.n);
-        self.depth = self.max_depth;
-        self.success = self.solved();
-        self.metrics.reset();
-        self.metrics_values = self.metrics.snapshot();
-        self.reward_value = if self.success { 1.0 } else { 0.0 };
-
         let mut rng = rand::thread_rng();
         let action_range = Uniform::new(0, self.num_actions());
 
@@ -324,6 +325,14 @@ impl Env for Clifford {
             self.metrics_values = new_metrics;
 
             self.apply_gate_to_state(&gate);
+        }
+
+        if self.track_solution {
+            if self.inverted {
+                self.solution_inv.push(action);
+            } else {
+                self.solution.push(action);
+            }
         }
 
         self.depth = self.depth.saturating_sub(1);
@@ -357,6 +366,15 @@ impl Env for Clifford {
     fn twists(&self) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
         (self.obs_perms.clone(), self.act_perms.clone())
     }
+
+    fn track_solution(&self) -> bool { self.track_solution }
+
+    fn solution(&self) -> Vec<usize> {
+        let mut out = Vec::with_capacity(self.solution.len() + self.solution_inv.len());
+        out.extend_from_slice(&self.solution);
+        out.extend(self.solution_inv.iter().rev().copied());
+        out
+    }
 }
 
 #[pyclass(name="CliffordEnv", extends=PyBaseEnv)]
@@ -374,6 +392,7 @@ impl PyCliffordEnv {
         metrics_weights=None,
         add_inverts=None,
         add_perms=None,
+        track_solution=None,
     ))]
     pub fn new(
         num_qubits: usize,
@@ -384,6 +403,7 @@ impl PyCliffordEnv {
         metrics_weights: Option<HashMap<String, f32>>,
         add_inverts: Option<bool>,
         add_perms: Option<bool>,
+        track_solution: Option<bool>,
     ) -> (Self, PyBaseEnv) {
         let weights = MetricsWeights::from_hashmap(metrics_weights);
         let env = Clifford::new(
@@ -395,6 +415,7 @@ impl PyCliffordEnv {
             weights,
             add_inverts.unwrap_or(true),
             add_perms.unwrap_or(true),
+            track_solution.unwrap_or(true),
         );
         let env = Box::new(env);
         (PyCliffordEnv, PyBaseEnv { env })

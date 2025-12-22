@@ -125,10 +125,12 @@ class RLSynthesis:
             state, deterministic, num_searches, num_mcts_searches, C, max_expand_depth
         )
         if actions is not None:
-            return gate_list_to_circuit(
+            synth_circuit = gate_list_to_circuit(
                 [self.env_config["gateset"][a] for a in actions],
                 num_qubits=self.env.config["num_qubits"],
             )
+            synth_circuit = self.env.post_process_synthesis(synth_circuit, input)
+            return synth_circuit
 
     def learn(self, initial_difficulty=1, num_iterations=int(1e10), tb_path=None):
         if tb_path is not None:
