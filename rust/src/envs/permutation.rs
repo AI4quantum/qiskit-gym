@@ -39,7 +39,6 @@ pub struct Permutation {
     pub max_depth: usize,
     pub obs_perms: Vec<Vec<usize>>,
     pub act_perms: Vec<Vec<usize>>,
-    pub add_inverts: bool,
     metrics: MetricsTracker,
     metrics_values: MetricsCounts,
     metrics_weights: MetricsWeights,
@@ -85,7 +84,6 @@ impl Permutation {
             max_depth,
             obs_perms,
             act_perms,
-            add_inverts,
             metrics,
             metrics_values,
             metrics_weights,
@@ -140,6 +138,7 @@ impl Permutation {
         let mut rng = rand::thread_rng();
         if rng.gen_bool(0.5) {
             self.state = Self::invert_perm(&self.state);
+            self.inverted = !self.inverted;
         }
     }
 
