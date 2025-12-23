@@ -17,7 +17,7 @@ import json
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from twisterl.utils import dynamic_import
+from twisterl.utils import dynamic_import, load_checkpoint
 from qiskit_gym.rl.configs import (
     AlphaZeroConfig,
     PPOConfig,
@@ -103,9 +103,7 @@ class RLSynthesis:
             act_perms=act_perms,
         )
         if model_path is not None:
-            model.load_state_dict(
-                torch.load(open(model_path, "rb"), map_location=torch.device("cpu"))
-            )
+            model.load_state_dict(load_checkpoint(model_path))
 
         return self.algorithm_cls(
             self.env._raw_env, model, self.rl_config.to_json(), None
