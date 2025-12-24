@@ -123,7 +123,7 @@ class RLSynthesis:
             state, deterministic, num_searches, num_mcts_searches, C, max_expand_depth
         )
         if actions is not None:
-            synth_circuit = gate_list_to_circuit(
+            synth_circuit = self.env.gate_list_to_circuit(
                 [self.env_config["gateset"][a] for a in actions],
                 num_qubits=self.env.config["num_qubits"],
             )
@@ -141,12 +141,3 @@ class RLSynthesis:
             self.algorithm.learn(num_iterations)
         except KeyboardInterrupt:
             return
-
-
-def gate_list_to_circuit(gate_list, num_qubits=None):
-    if num_qubits is None:
-        num_qubits = max(max(gate_args) for _, gate_args in gate_list) + 1
-    qc = QuantumCircuit(num_qubits)
-    for gate_name, gate_args in gate_list:
-        getattr(qc, gate_name.lower())(*gate_args)
-    return qc

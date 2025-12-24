@@ -16,7 +16,7 @@ from qiskit_gym import qiskit_gym_rs
 
 from .adapters import gym_adapter
 from qiskit.transpiler import CouplingMap
-from typing import List, Tuple, Iterable, ClassVar
+from typing import Any, List, Tuple, Iterable, ClassVar
 
 from abc import ABC, abstractmethod
 
@@ -101,7 +101,15 @@ class BaseSynthesisEnv(ABC):
     def get_state(cls, input):
         pass
 
-    def post_process_synthesis(self, synth_circuit: QuantumCircuit, input_state):
+    def gate_list_to_circuit(self, gate_list: List[Tuple[str, List[int]]], num_qubits: int) -> QuantumCircuit:
+        if num_qubits is None:
+            num_qubits = max(max(gate_args) for _, gate_args in gate_list) + 1
+        qc = QuantumCircuit(num_qubits)
+        for gate_name, gate_args in gate_list:
+            getattr(qc, gate_name.lower())(*gate_args)
+        return qc
+
+    def post_process_synthesis(self, synth_circuit: QuantumCircuit, input_state: Any) -> QuantumCircuit:
         return synth_circuit
 
 # ---------------------------------------
@@ -164,7 +172,7 @@ class CliffordGym(CliffordEnv, BaseSynthesisEnv):
         if isinstance(input, QuantumCircuit):
             input = Clifford(input)
         return input.adjoint().tableau[:, :-1].T.flatten().astype(int).tolist()
-    
+
     def post_process_synthesis(self, synth_circuit: QuantumCircuit, input):
         synth_circuit = synth_circuit.inverse()
         if isinstance(input, QuantumCircuit):
