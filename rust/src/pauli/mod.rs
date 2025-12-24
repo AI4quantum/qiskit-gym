@@ -11,19 +11,6 @@ copyright notice, and modified files need to carry a notice indicating
 that they have been altered from the originals.
 */
 
-use pyo3::prelude::*;
-pub mod envs;
 pub mod pauli;
-
-use crate::envs::clifford::PyCliffordEnv;
-use crate::envs::linear_function::PyLinearFunctionEnv;
-use crate::envs::permutation::PyPermutationEnv;
-
-
-#[pymodule]
-fn qiskit_gym_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyCliffordEnv>()?;
-    m.add_class::<PyLinearFunctionEnv>()?;
-    m.add_class::<PyPermutationEnv>()?;
-    Ok(())
-}
+pub mod pauli_dag;
+pub mod pauli_network;

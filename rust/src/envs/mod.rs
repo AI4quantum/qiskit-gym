@@ -14,6 +14,7 @@ that they have been altered from the originals.
 pub mod clifford;
 pub mod linear_function;
 pub mod permutation;
+pub mod pauli;
 pub mod common;
 pub mod symmetry;
 pub mod metrics;

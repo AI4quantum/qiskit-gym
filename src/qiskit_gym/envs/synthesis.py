@@ -52,6 +52,7 @@ class BaseSynthesisEnv(ABC):
         assert all(g in cls.allowed_gates for g in basis_gates), (
             f"Some provided gates are not allowed (allowed: {cls.allowed_gates})."
         )
+        single_qubit_gates = set(ONE_Q_GATES) | {"RX", "RY", "RZ"}
 
         if isinstance(coupling_map, CouplingMap):
             coupling_map = list(coupling_map.get_edges())
@@ -61,7 +62,7 @@ class BaseSynthesisEnv(ABC):
 
         gateset = []
         for gate_name in basis_gates:
-            if gate_name in ONE_Q_GATES:
+            if gate_name in single_qubit_gates:
                 for q in range(num_qubits):
                     gateset.append((gate_name, (q,)))
             else:
@@ -111,6 +112,8 @@ class BaseSynthesisEnv(ABC):
 from qiskit.quantum_info import Clifford
 
 CliffordEnv = gym_adapter(qiskit_gym_rs.CliffordEnv)
+PauliEnv = gym_adapter(qiskit_gym_rs.PauliEnv)
+from .pauli_network import pauli_payload_from_circuit
 
 def _solve_phases(clifford_cpy):
     num_qubits = clifford_cpy.num_qubits
@@ -169,6 +172,48 @@ class CliffordGym(CliffordEnv, BaseSynthesisEnv):
         dcliff = Clifford(synth_circuit).compose(input)
         out = _solve_phases(dcliff).compose(synth_circuit).inverse()
         return out
+
+
+class PauliGym(PauliEnv, BaseSynthesisEnv):
+    cls_name = "PauliEnv"
+    allowed_gates = ONE_Q_GATES + ["CX", "RX", "RY", "RZ"]
+
+    def __init__(
+        self,
+        num_qubits: int,
+        gateset: List[Tuple[str, List[int]]],
+        difficulty: int = 1,
+        depth_slope: int = 2,
+        max_depth: int = 128,
+        max_rotations: int = 6,
+        metrics_weights: dict[str, float] | None = None,
+    ):
+        self.max_rotations = max_rotations
+        super().__init__(**{
+            "num_qubits": num_qubits,
+            "difficulty": difficulty,
+            "gateset": gateset,
+            "depth_slope": depth_slope,
+            "max_depth": max_depth,
+            "max_rotations": max_rotations,
+            "metrics_weights": metrics_weights,
+        })
+
+    def get_state(self, input):
+        if isinstance(input, QuantumCircuit):
+            tableau, rotations = pauli_payload_from_circuit(input)
+        else:
+            tableau, rotations = input
+
+        rotations = list(rotations)[: self.max_rotations]
+        tableau_flat = np.array(tableau, dtype=int).flatten().astype(int).tolist()
+
+        state: List[int] = [len(rotations)]
+        state.extend(tableau_flat)
+        for label in rotations:
+            state.append(len(label))
+            state.extend([ord(ch) for ch in label])
+        return state
 
 
 # ------------- Linear Function -------------
@@ -263,4 +308,5 @@ SYNTH_ENVS = {
     "CliffordEnv": CliffordGym,
     "LinearFunctionEnv": LinearFunctionGym,
     "PermutationEnv": PermutationGym,
+    "PauliEnv": PauliGym,
 }
