@@ -130,6 +130,18 @@ impl Permutation {
     pub fn get_state(&self) -> Vec<usize> {
         self.state.clone()
     }
+
+    fn reset_internals(&mut self) {
+        self.success = self.solved();
+        self.metrics.reset();
+        self.metrics_values = self.metrics.snapshot();
+        self.reward_value = if self.success { 1.0 } else { 0.0 };
+        self.inverted = false;
+        if self.track_solution {
+            self.solution_inv = Vec::new();
+            self.solution = Vec::new();
+        }
+    }
 }
 
 // This implements the necessary functions for the environment
@@ -157,11 +169,7 @@ impl Env for Permutation {
         self.state = state.iter().map(|&x| x as usize).collect();
 
         self.depth = self.max_depth;  
-        self.success = self.solved();
-        self.metrics.reset();
-        self.metrics_values = self.metrics.snapshot();
-        self.reward_value = if self.success { 1.0 } else { 0.0 };
-        self.inverted = false;
+        self.reset_internals();
     }
 
     fn reset(&mut self) {
@@ -180,11 +188,7 @@ impl Env for Permutation {
             }
         }
         self.depth = (self.depth_slope * self.difficulty).min(self.max_depth);
-        self.success = self.solved();
-        self.metrics.reset();
-        self.metrics_values = self.metrics.snapshot();
-        self.reward_value = if self.success { 1.0 } else { 0.0 };
-        self.inverted = false;
+        self.reset_internals();
     }
 
     fn step(&mut self, action: usize)  {

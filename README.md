@@ -87,6 +87,12 @@ random_permutation = np.random.permutation(9)
 optimized_circuit = rls.synth(random_permutation, num_searches=1000)
 ```
 
+## 🏅 Reward and Gate Penalties (at a glance)
+- Each step returns `reward = (1.0 if solved else 0.0) - penalty`.
+- `penalty` is the weighted increase in cost metrics after the chosen gate: CNOT count, CNOT layers, total layers, and total gates.
+- Default weights (`MetricsWeights`) are `n_cnots=0.01`, `n_layers_cnots=0.0`, `n_layers=0.0`, `n_gates=0.0001`; configure per env via `metrics_weights`.
+- Metrics accumulate over the episode; once the target is solved, the positive reward is offset by the penalties from any extra cost incurred.
+
 ## 🤝 Contributing
 
 We welcome contributions! Whether you're adding new synthesis problems, improving RL algorithms, or enhancing documentation - every contribution helps advance quantum computing research.

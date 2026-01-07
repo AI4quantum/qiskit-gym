@@ -268,6 +268,18 @@ impl Clifford {
             self.inverted = !self.inverted;
         }
     }
+
+    fn reset_internals(&mut self) {
+        self.success = self.solved();
+        self.metrics.reset();
+        self.metrics_values = self.metrics.snapshot();
+        self.reward_value = if self.success { 1.0 } else { 0.0 };
+        self.inverted = false;
+        if self.track_solution {
+            self.solution_inv = Vec::new();
+            self.solution = Vec::new();
+        }
+    }
 }
 
 impl Env for Clifford {
@@ -288,11 +300,7 @@ impl Env for Clifford {
         // Expecting a flattened 2N x 2N boolean matrix encoded as i64s (>0 => true)
         self.cf.data = state.iter().map(|&x| x > 0).collect();
         self.depth = self.max_depth;
-        self.success = self.solved();
-        self.metrics.reset();
-        self.metrics_values = self.metrics.snapshot();
-        self.reward_value = if self.success { 1.0 } else { 0.0 };
-        self.inverted = false;
+        self.reset_internals();
     }
 
     fn reset(&mut self) {
@@ -307,11 +315,7 @@ impl Env for Clifford {
             }
         }
         self.depth = (self.depth_slope * self.difficulty).min(self.max_depth);
-        self.success = self.solved();
-        self.metrics.reset();
-        self.metrics_values = self.metrics.snapshot();
-        self.reward_value = if self.success { 1.0 } else { 0.0 };
-        self.inverted = false;
+        self.reset_internals();
     }
 
     fn step(&mut self, action: usize) {
