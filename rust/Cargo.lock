@@ -351,7 +351,7 @@ dependencies = [
  "pyo3",
  "rand",
  "rayon",
- "twisterl-rs",
+ "twisterl",
 ]
 
 [[package]]
@@ -465,10 +465,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e502f78cdbb8ba4718f566c418c52bc729126ffd16baee5baa718cf25dd5a69a"
 
 [[package]]
-name = "twisterl-rs"
-version = "0.1.0"
+name = "twisterl"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25a14d819575b07f13110e7ebfe96f7be712a567bb0126e22a624aaf30fda9e3"
+checksum = "2e20f49e0f02e09d1ddee49bde56e1ea4642427580012458cf98d6d87fd0c15c"
 dependencies = [
  "anyhow",
  "dyn-clone",
