@@ -14,6 +14,7 @@ that they have been altered from the originals.
 use pyo3::prelude::*;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::types::PySequence;
+use pyo3::Borrowed;
 
 #[derive(Clone, Debug)]
 pub enum Gate {
@@ -42,11 +43,13 @@ impl std::fmt::Display for Gate {
     }
 }
 
-impl<'py> FromPyObject<'py> for Gate {
-    fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+impl<'a, 'py> FromPyObject<'a, 'py> for Gate {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
         // Expect (name, indices)
         let pair = ob
-            .downcast::<PySequence>()
+            .cast::<PySequence>()
             .map_err(|_| PyTypeError::new_err("Each gate must be a 2-item sequence: (name, indices)"))?;
         if pair.len()? != 2 {
             return Err(PyValueError::new_err(
@@ -63,7 +66,7 @@ impl<'py> FromPyObject<'py> for Gate {
 
         let idx_obj = pair.get_item(1)?;
         let idx_seq = idx_obj
-            .downcast::<PySequence>()
+            .cast::<PySequence>()
             .map_err(|_| PyTypeError::new_err("Gate indices must be a list/tuple of integers"))?;
         let n = idx_seq.len()?;
         let mut idx = Vec::with_capacity(n);
