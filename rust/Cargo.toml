@@ -14,7 +14,7 @@ nalgebra = "0.33.0"
 rand = "0.8.4"
 rayon = "1.1.0"
 petgraph = "0.6.5"
-twisterl = {version = "~0.5.0", features = ["python_bindings"]}
+twisterl = {version = "~0.5.1", features = ["python_bindings"]}
 
 [profile.release]
 opt-level = 3
