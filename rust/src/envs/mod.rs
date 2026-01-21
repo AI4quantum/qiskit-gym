@@ -13,6 +13,7 @@ that they have been altered from the originals.
 
 pub mod clifford;
 pub mod linear_function;
+pub mod pauli;
 pub mod permutation;
 pub mod common;
 pub mod symmetry;

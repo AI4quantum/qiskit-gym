@@ -252,9 +252,66 @@ class PermutationGym(PermutationEnv, BaseSynthesisEnv):
         elif isinstance(input, PermutationGate):
             input = input.pattern
 
-        # This returns the inverse permutation to get the right 
+        # This returns the inverse permutation to get the right
         # synthesized circuit at output, instead of its inverse.
         return np.argsort(np.array(input)).astype(int).tolist()
+
+
+# ------------- Pauli Network -------------
+
+PauliNetworkEnv = gym_adapter(qiskit_gym_rs.PauliNetworkEnv)
+
+
+class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
+    cls_name = "PauliNetworkEnv"
+    allowed_gates = ONE_Q_GATES + TWO_Q_GATES
+
+    def __init__(
+        self,
+        num_qubits: int,
+        gateset: List[Tuple[str, List[int]]],
+        difficulty: int = 1,
+        depth_slope: int = 2,
+        max_depth: int = 128,
+        max_rotations: int = 5,
+        metrics_weights: dict[str, float] | None = None,
+        add_perms: bool = True,
+        pauli_layer_reward: float = 0.01,
+    ):
+        super().__init__(**{
+            "num_qubits": num_qubits,
+            "difficulty": difficulty,
+            "gateset": gateset,
+            "depth_slope": depth_slope,
+            "max_depth": max_depth,
+            "max_rotations": max_rotations,
+            "metrics_weights": metrics_weights,
+            "add_perms": add_perms,
+            "pauli_layer_reward": pauli_layer_reward,
+        })
+
+    def get_state(self, clifford: Clifford, rotations: List[str]):
+        """
+        Encode Clifford tableau and rotation labels into state.
+
+        Args:
+            clifford: Qiskit Clifford object
+            rotations: List of Pauli rotation labels (e.g., ["IX", "ZY"])
+
+        Returns:
+            State as list of integers for set_state()
+        """
+        # State format: [rotation_count, tableau..., len1, chars1..., len2, chars2..., ...]
+        tableau = clifford.adjoint().tableau[:, :-1].T.flatten().astype(int).tolist()
+
+        state = [len(rotations)]
+        state.extend(tableau)
+
+        for rot in rotations:
+            state.append(len(rot))
+            state.extend([ord(c) for c in rot])
+
+        return state
 
 
 # ---------------------------------------
@@ -263,4 +320,5 @@ SYNTH_ENVS = {
     "CliffordEnv": CliffordGym,
     "LinearFunctionEnv": LinearFunctionGym,
     "PermutationEnv": PermutationGym,
+    "PauliNetworkEnv": PauliGym,
 }
