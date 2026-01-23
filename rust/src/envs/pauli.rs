@@ -89,6 +89,8 @@ pub struct PauliEnv {
     metrics_weights: MetricsWeights,
     reward_value: f32,
     pauli_layer_reward: f32,
+    track_solution: bool,
+    solution: Vec<usize>,
 }
 
 impl PauliEnv {
@@ -102,6 +104,7 @@ impl PauliEnv {
         metrics_weights: MetricsWeights,
         add_perms: bool,
         pauli_layer_reward: f32,
+        track_solution: bool,
     ) -> Self {
         let tableau = identity_tableau(num_qubits);
         let network = PauliNetwork::new(tableau, Vec::new());
@@ -134,6 +137,8 @@ impl PauliEnv {
             metrics_weights,
             reward_value: if success { 1.0 } else { 0.0 },
             pauli_layer_reward,
+            track_solution,
+            solution: Vec::new(),
         }
     }
 
@@ -263,6 +268,9 @@ impl Env for PauliEnv {
         self.metrics.reset();
         self.metrics_values = self.metrics.snapshot();
         self.reward_value = if self.success { 1.0 } else { 0.0 };
+        if self.track_solution {
+            self.solution = Vec::new();
+        }
     }
 
     fn step(&mut self, action: usize) {
@@ -279,6 +287,10 @@ impl Env for PauliEnv {
             // act() returns rotations that became trivial
             let applied_rotations = self.network.act(&gate);
             new_rotations = applied_rotations.len();
+        }
+
+        if self.track_solution {
+            self.solution.push(action);
         }
 
         self.depth = self.depth.saturating_sub(1);
@@ -315,6 +327,14 @@ impl Env for PauliEnv {
     fn twists(&self) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
         (self.obs_perms.clone(), self.act_perms.clone())
     }
+
+    fn track_solution(&self) -> bool {
+        self.track_solution
+    }
+
+    fn solution(&self) -> Vec<usize> {
+        self.solution.clone()
+    }
 }
 
 #[pyclass(name = "PauliNetworkEnv", extends = PyBaseEnv)]
@@ -333,6 +353,7 @@ impl PyPauliEnv {
         metrics_weights=None,
         add_perms=None,
         pauli_layer_reward=None,
+        track_solution=None,
     ))]
     pub fn new(
         num_qubits: usize,
@@ -344,6 +365,7 @@ impl PyPauliEnv {
         metrics_weights: Option<HashMap<String, f32>>,
         add_perms: Option<bool>,
         pauli_layer_reward: Option<f32>,
+        track_solution: Option<bool>,
     ) -> (Self, PyBaseEnv) {
         let weights = MetricsWeights::from_hashmap(metrics_weights);
         let env = PauliEnv::new(
@@ -356,6 +378,7 @@ impl PyPauliEnv {
             weights,
             add_perms.unwrap_or(true),
             pauli_layer_reward.unwrap_or(0.01),
+            track_solution.unwrap_or(true),
         );
         let env = Box::new(env);
         (PyPauliEnv, PyBaseEnv { env })
