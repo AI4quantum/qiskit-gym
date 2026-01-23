@@ -261,6 +261,60 @@ class PermutationGym(PermutationEnv, BaseSynthesisEnv):
 
 PauliNetworkEnv = gym_adapter(qiskit_gym_rs.PauliNetworkEnv)
 
+def _parse_pauli_circuit(circuit: QuantumCircuit) -> Tuple[Clifford, List[str]]:
+    """
+    Parse a QuantumCircuit into its Clifford and rotation components.
+    The circuit should contain Clifford gates (h, s, sdg, sx, sxdg, cx, cz, swap)
+    and Pauli rotation gates (rx, ry, rz).
+    Returns:
+        Tuple of (Clifford, list of rotation strings)
+    """
+    num_qubits = circuit.num_qubits
+    clifford_gates = {'h', 's', 'sdg', 'sx', 'sxdg', 'cx', 'cz', 'swap', 'x', 'y', 'z'}
+    rotation_gates = {'rx', 'ry', 'rz'}
+    # Build a circuit with just Clifford gates to get the Clifford
+    clifford_circuit = QuantumCircuit(num_qubits)
+    rotations = []
+    for instruction in circuit.data:
+        gate_name = instruction.operation.name.lower()
+        qubits = [circuit.find_bit(q).index for q in instruction.qubits]
+        if gate_name in clifford_gates:
+            # Add Clifford gate to the clifford circuit
+            if gate_name == 'h':
+                clifford_circuit.h(qubits[0])
+            elif gate_name == 's':
+                clifford_circuit.s(qubits[0])
+            elif gate_name == 'sdg':
+                clifford_circuit.sdg(qubits[0])
+            elif gate_name == 'sx':
+                clifford_circuit.sx(qubits[0])
+            elif gate_name == 'sxdg':
+                clifford_circuit.sxdg(qubits[0])
+            elif gate_name == 'cx':
+                clifford_circuit.cx(qubits[0], qubits[1])
+            elif gate_name == 'cz':
+                clifford_circuit.cz(qubits[0], qubits[1])
+            elif gate_name == 'swap':
+                clifford_circuit.swap(qubits[0], qubits[1])
+            elif gate_name == 'x':
+                clifford_circuit.x(qubits[0])
+            elif gate_name == 'y':
+                clifford_circuit.y(qubits[0])
+            elif gate_name == 'z':
+                clifford_circuit.z(qubits[0])
+        elif gate_name in rotation_gates:
+            # Extract rotation as Pauli string
+            qubit = qubits[0]
+            pauli_chars = ['I'] * num_qubits
+            if gate_name == 'rx':
+                pauli_chars[num_qubits - 1 - qubit] = 'X'
+            elif gate_name == 'ry':
+                pauli_chars[num_qubits - 1 - qubit] = 'Y'
+            elif gate_name == 'rz':
+                pauli_chars[num_qubits - 1 - qubit] = 'Z'
+            rotations.append(''.join(pauli_chars))
+    clifford = Clifford(clifford_circuit) if clifford_circuit.data else Clifford(np.eye(2 * num_qubits, dtype=int))
+    return clifford, rotations
 
 class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
     cls_name = "PauliNetworkEnv"
@@ -277,6 +331,7 @@ class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
         metrics_weights: dict[str, float] | None = None,
         add_perms: bool = True,
         pauli_layer_reward: float = 0.01,
+        track_solution: bool = True,
     ):
         super().__init__(**{
             "num_qubits": num_qubits,
@@ -288,19 +343,35 @@ class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
             "metrics_weights": metrics_weights,
             "add_perms": add_perms,
             "pauli_layer_reward": pauli_layer_reward,
+            "track_solution": track_solution,
         })
 
-    def get_state(self, clifford: Clifford, rotations: List[str]):
+    def get_state(self, input, rotations: List[str] = None):
         """
         Encode Clifford tableau and rotation labels into state.
 
         Args:
-            clifford: Qiskit Clifford object
+            input: Either:
+                - A Qiskit Clifford object (with rotations as second arg)
+                - A tuple (Clifford, rotations)
+                - A QuantumCircuit to parse
             rotations: List of Pauli rotation labels (e.g., ["IX", "ZY"])
+                      when input is a Clifford
 
         Returns:
             State as list of integers for set_state()
         """
+        if isinstance(input, tuple):
+            clifford, rotations = input
+        elif isinstance(input, QuantumCircuit):
+            clifford, rotations = _parse_pauli_circuit(input)
+        elif isinstance(input, Clifford):
+            clifford = input
+            if rotations is None:
+                rotations = []
+        else:
+            raise ValueError(f"Unsupported input type: {type(input)}")
+
         # State format: [rotation_count, tableau..., len1, chars1..., len2, chars2..., ...]
         tableau = clifford.adjoint().tableau[:, :-1].T.flatten().astype(int).tolist()
 
@@ -312,13 +383,25 @@ class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
             state.extend([ord(c) for c in rot])
 
         return state
+    
+    # def post_process_synthesis(self, synth_circuit: QuantumCircuit, input):
+    #     synth_circuit = synth_circuit.inverse()
+    #     if isinstance(input, QuantumCircuit):
+    #         input = Clifford(input)
+    #     dcliff = Clifford(synth_circuit).compose(input)
+    #     out = _solve_phases(dcliff).compose(synth_circuit).inverse()
+    #     return out
 
 
 # ---------------------------------------
 
 SYNTH_ENVS = {
     "CliffordEnv": CliffordGym,
+    "CliffordGym": CliffordGym,
     "LinearFunctionEnv": LinearFunctionGym,
+    "LinearFunctionGym": LinearFunctionGym,
     "PermutationEnv": PermutationGym,
+    "PermutationGym": PermutationGym,
     "PauliNetworkEnv": PauliGym,
+    "PauliGym": PauliGym,
 }
