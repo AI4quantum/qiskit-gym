@@ -22,9 +22,25 @@ use twisterl::rl::env::Env;
 use crate::envs::common::Gate;
 use crate::envs::metrics::{MetricsCounts, MetricsTracker, MetricsWeights};
 use crate::envs::symmetry::compute_twists_pauli;
-use crate::pauli::pauli_network::PauliNetwork;
+use crate::pauli::pauli_network::{Axis, PauliNetwork};
 use nalgebra::DMatrix;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque, BTreeMap};
+
+/// Represents a step in the Pauli network synthesis solution.
+/// Can be either a gate action or a rotation that became trivial.
+#[derive(Clone, Debug)]
+pub enum SolutionStep {
+    /// A gate action (index into gateset)
+    Gate(usize),
+    /// A rotation that became trivial: (axis, qubit, rotation_index, phase_multiplier)
+    /// phase_multiplier is 1 or -1 depending on the phase
+    Rotation {
+        axis: Axis,
+        qubit: usize,
+        index: usize,
+        phase_mult: i32,
+    },
+}
 
 fn identity_tableau(num_qubits: usize) -> Vec<u8> {
     let dim = 2 * num_qubits;
@@ -35,28 +51,260 @@ fn identity_tableau(num_qubits: usize) -> Vec<u8> {
     data
 }
 
-fn encode_pauli_label(num_qubits: usize, qubit: usize, axis: char) -> String {
-    let mut chars = vec!['I'; num_qubits];
-    if qubit < num_qubits {
-        chars[num_qubits - 1 - qubit] = axis;
+/// Compute shortest path distances between all pairs of qubits using BFS
+/// Returns a map from (q1, q2) -> distance
+fn compute_graph_distances(num_qubits: usize, edges: &[(usize, usize)]) -> HashMap<(usize, usize), usize> {
+    // Build adjacency list
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); num_qubits];
+    for &(q1, q2) in edges {
+        if !adj[q1].contains(&q2) {
+            adj[q1].push(q2);
+        }
+        if !adj[q2].contains(&q1) {
+            adj[q2].push(q1);
+        }
     }
-    chars.into_iter().collect()
+
+    let mut distances = HashMap::new();
+
+    // BFS from each node
+    for start in 0..num_qubits {
+        let mut visited = vec![false; num_qubits];
+        let mut queue = VecDeque::new();
+        queue.push_back((start, 0usize));
+        visited[start] = true;
+
+        while let Some((node, dist)) = queue.pop_front() {
+            distances.insert((start, node), dist);
+            distances.insert((node, start), dist);
+
+            for &neighbor in &adj[node] {
+                if !visited[neighbor] {
+                    visited[neighbor] = true;
+                    queue.push_back((neighbor, dist + 1));
+                }
+            }
+        }
+    }
+
+    distances
 }
 
-fn random_rotations(num_qubits: usize, max_rotations: usize) -> Vec<String> {
-    if max_rotations == 0 || num_qubits == 0 {
+/// Build dist_pairs: map from distance -> list of qubit pairs at that distance
+/// Also returns all_dists: sorted unique distances
+fn build_dist_pairs(
+    num_qubits: usize,
+    distances: &HashMap<(usize, usize), usize>,
+) -> (BTreeMap<usize, Vec<(usize, usize)>>, Vec<usize>) {
+    let mut dist_pairs: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new();
+
+    for q1 in 0..num_qubits {
+        for q2 in (q1 + 1)..num_qubits {
+            if let Some(&dist) = distances.get(&(q1, q2)) {
+                dist_pairs.entry(dist).or_default().push((q1, q2));
+            }
+        }
+    }
+
+    let all_dists: Vec<usize> = dist_pairs.keys().copied().collect();
+    (dist_pairs, all_dists)
+}
+
+/// Generate a single Pauli rotation using difficulty budget (matches Python _get_pauli_under_diff)
+/// Returns (pauli_string, cost) or None if can't generate
+fn get_pauli_under_diff(
+    num_qubits: usize,
+    difficulty: usize,
+    dist_pairs: &BTreeMap<usize, Vec<(usize, usize)>>,
+    all_dists: &[usize],
+    num_qubits_decay: f32,
+) -> Option<(String, usize)> {
+    let mut rng = rand::thread_rng();
+    let axes = ['X', 'Y', 'Z'];
+
+    // Find valid distances <= difficulty
+    let valid_dists: Vec<usize> = all_dists.iter().copied().filter(|&d| d <= difficulty).collect();
+    if valid_dists.is_empty() {
+        return None;
+    }
+
+    let mut qubits: HashSet<usize> = HashSet::new();
+    let mut pauli_diff = difficulty;
+
+    // Generate the first pair
+    let valid_for_first: Vec<usize> = valid_dists.iter().copied().filter(|&d| d <= pauli_diff).collect();
+    if valid_for_first.is_empty() {
+        return None;
+    }
+
+    let next_dif = valid_for_first[rng.gen_range(0..valid_for_first.len())];
+    let pairs = &dist_pairs[&next_dif];
+    let (q1, q2) = pairs[rng.gen_range(0..pairs.len())];
+    qubits.insert(q1);
+    qubits.insert(q2);
+    pauli_diff = pauli_diff.saturating_sub(next_dif);
+
+    // Add more qubits with decay probability (matches Python's num_qubits_decay)
+    loop {
+        let valid_diffs: Vec<usize> = valid_dists.iter().copied().filter(|&d| d <= pauli_diff).collect();
+        let remaining_qs: Vec<usize> = (0..num_qubits).filter(|q| !qubits.contains(q)).collect();
+
+        if pauli_diff == 0 || valid_diffs.is_empty() || remaining_qs.is_empty() {
+            break;
+        }
+
+        // Continue with probability (1 - num_qubits_decay)
+        if rng.gen::<f32>() <= num_qubits_decay {
+            break;
+        }
+
+        let next_dif = valid_diffs[rng.gen_range(0..valid_diffs.len())];
+
+        // Find pairs at this distance that connect to existing qubits
+        let valid_pairs: Vec<(usize, usize)> = dist_pairs[&next_dif]
+            .iter()
+            .copied()
+            .filter(|(a, b)| qubits.contains(a) || qubits.contains(b))
+            .collect();
+
+        if valid_pairs.is_empty() {
+            continue;
+        }
+
+        let (q1, q2) = valid_pairs[rng.gen_range(0..valid_pairs.len())];
+        qubits.insert(q1);
+        qubits.insert(q2);
+        pauli_diff = pauli_diff.saturating_sub(next_dif);
+    }
+
+    // Build the pauli string
+    let mut pauli_layer = vec!['I'; num_qubits];
+    for q in &qubits {
+        pauli_layer[*q] = axes[rng.gen_range(0..axes.len())];
+    }
+
+    let cost = difficulty - pauli_diff;
+    Some((pauli_layer.into_iter().collect(), cost))
+}
+
+/// Generate random Pauli rotations with random weights (for pauli_difficulty=None case)
+/// This matches the Python PauliNetworkGenerator behavior when difficulty is None
+fn random_rotations(num_qubits: usize, rotation_count: usize) -> Vec<String> {
+    if rotation_count == 0 || num_qubits == 0 {
         return Vec::new();
     }
     let mut rng = rand::thread_rng();
     let axes = ['X', 'Y', 'Z'];
-    let rotation_count = rng.gen_range(1..=max_rotations);
+
     (0..rotation_count)
         .map(|_| {
-            let q = rng.gen_range(0..num_qubits);
-            let axis = axes[rng.gen_range(0..axes.len())];
-            encode_pauli_label(num_qubits, q, axis)
+            // Generate Pauli label with random weight (1 to num_qubits-1)
+            // Matches Python: pauli_weight = np.random.randint(1, self.num_qubits)
+            let mut pauli_layer = vec!['I'; num_qubits];
+            let pauli_weight = if num_qubits > 1 {
+                rng.gen_range(1..num_qubits)
+            } else {
+                1
+            };
+
+            // Choose random positions without replacement (partial Fisher-Yates)
+            let mut positions: Vec<usize> = (0..num_qubits).collect();
+            for i in 0..pauli_weight {
+                let j = rng.gen_range(i..num_qubits);
+                positions.swap(i, j);
+            }
+
+            // Assign random Pauli types to selected positions
+            for &pos in positions.iter().take(pauli_weight) {
+                pauli_layer[pos] = axes[rng.gen_range(0..axes.len())];
+            }
+
+            pauli_layer.into_iter().collect()
         })
         .collect()
+}
+
+/// Generate paulis based on difficulty budget (matches Python's generate() method)
+fn generate_paulis_with_difficulty(
+    num_qubits: usize,
+    pauli_difficulty: usize,
+    max_paulis: usize,
+    dist_pairs: &BTreeMap<usize, Vec<(usize, usize)>>,
+    all_dists: &[usize],
+    num_qubits_decay: f32,
+) -> Vec<String> {
+    let mut paulis = Vec::new();
+    let mut remaining_diff = pauli_difficulty;
+
+    while remaining_diff > 0 && paulis.len() < max_paulis {
+        match get_pauli_under_diff(num_qubits, remaining_diff, dist_pairs, all_dists, num_qubits_decay) {
+            Some((pauli, cost)) => {
+                paulis.push(pauli);
+                remaining_diff = remaining_diff.saturating_sub(cost.max(1));
+            }
+            None => break,
+        }
+    }
+
+    paulis
+}
+
+/// Generate a random Clifford tableau by applying random H/S/CX gates to identity
+/// This matches the Python PauliNetworkGenerator.generate() behavior:
+/// - 70% probability of CX
+/// - 15% probability of H
+/// - 15% probability of S
+fn random_clifford_tableau(num_qubits: usize, difficulty: usize, valid_pairs: &[(usize, usize)]) -> Vec<u8> {
+    let dim = 2 * num_qubits;
+    let mut data = vec![0u8; dim * dim];
+
+    // Start with identity
+    for i in 0..dim {
+        data[i * dim + i] = 1;
+    }
+
+    if difficulty == 0 || valid_pairs.is_empty() {
+        return data;
+    }
+
+    let mut rng = rand::thread_rng();
+
+    // Helper to XOR row_a with row_b (row_a ^= row_b)
+    let xor_rows = |data: &mut Vec<u8>, dim: usize, row_a: usize, row_b: usize| {
+        for col in 0..dim {
+            data[row_a * dim + col] ^= data[row_b * dim + col];
+        }
+    };
+
+    // Helper to swap rows
+    let swap_rows = |data: &mut Vec<u8>, dim: usize, row_a: usize, row_b: usize| {
+        for col in 0..dim {
+            let tmp = data[row_a * dim + col];
+            data[row_a * dim + col] = data[row_b * dim + col];
+            data[row_b * dim + col] = tmp;
+        }
+    };
+
+    for _ in 0..difficulty {
+        let r = rng.gen::<f32>();
+        if r > 0.3 {
+            // 70% CX
+            let (q0, q1) = valid_pairs[rng.gen_range(0..valid_pairs.len())];
+            // CX conjugation: X_target += X_control, Z_control += Z_target
+            xor_rows(&mut data, dim, q1, q0); // target row += control row
+            xor_rows(&mut data, dim, num_qubits + q0, num_qubits + q1); // control+n += target+n
+        } else if r > 0.15 {
+            // 15% H
+            let q = rng.gen_range(0..num_qubits);
+            swap_rows(&mut data, dim, q, num_qubits + q);
+        } else {
+            // 15% S
+            let q = rng.gen_range(0..num_qubits);
+            xor_rows(&mut data, dim, num_qubits + q, q);
+        }
+    }
+
+    data
 }
 
 fn pad_state(data: &DMatrix<u8>, max_cols: usize) -> Vec<u8> {
@@ -82,6 +330,13 @@ pub struct PauliEnv {
     pub gateset: Vec<Gate>,
     pub depth_slope: usize,
     pub max_depth: usize,
+    pub pauli_diff_scale: usize,
+    pub num_qubits_decay: f32,
+    pub final_pauli_layers: usize,
+    // Graph distance data for pauli generation
+    dist_pairs: BTreeMap<usize, Vec<(usize, usize)>>,
+    all_dists: Vec<usize>,
+    valid_pairs: Vec<(usize, usize)>,
     pub obs_perms: Vec<Vec<usize>>,
     pub act_perms: Vec<Vec<usize>>,
     metrics: MetricsTracker,
@@ -90,7 +345,7 @@ pub struct PauliEnv {
     reward_value: f32,
     pauli_layer_reward: f32,
     track_solution: bool,
-    solution: Vec<usize>,
+    solution: Vec<SolutionStep>,
 }
 
 impl PauliEnv {
@@ -101,6 +356,9 @@ impl PauliEnv {
         depth_slope: usize,
         max_depth: usize,
         max_rotations: usize,
+        pauli_diff_scale: usize,
+        num_qubits_decay: f32,
+        final_pauli_layers: usize,
         metrics_weights: MetricsWeights,
         add_perms: bool,
         pauli_layer_reward: f32,
@@ -109,6 +367,19 @@ impl PauliEnv {
         let tableau = identity_tableau(num_qubits);
         let network = PauliNetwork::new(tableau, Vec::new());
         let success = network.solved();
+
+        // Extract valid CX pairs from gateset (matches Python's valid_pairs)
+        let valid_pairs: Vec<(usize, usize)> = gateset
+            .iter()
+            .filter_map(|gate| match gate {
+                Gate::CX(q0, q1) => Some((*q0, *q1)),
+                _ => None,
+            })
+            .collect();
+
+        // Compute graph distances from coupling map
+        let distances = compute_graph_distances(num_qubits, &valid_pairs);
+        let (dist_pairs, all_dists) = build_dist_pairs(num_qubits, &distances);
 
         // Only compute symmetries if enabled
         let (obs_perms, act_perms) = if add_perms {
@@ -130,6 +401,12 @@ impl PauliEnv {
             gateset,
             depth_slope,
             max_depth,
+            pauli_diff_scale: pauli_diff_scale.max(1),
+            num_qubits_decay,
+            final_pauli_layers,
+            dist_pairs,
+            all_dists,
+            valid_pairs,
             obs_perms,
             act_perms,
             metrics,
@@ -239,29 +516,28 @@ impl Env for PauliEnv {
     }
 
     fn reset(&mut self) {
-        let rotations = random_rotations(self.num_qubits, self.max_rotations);
-        let tableau = identity_tableau(self.num_qubits);
+        // Compute pauli_difficulty (matches Python's lf_diff_scale logic)
+        // pauli_difficulty = difficulty // pauli_diff_scale
+        let pauli_difficulty = self.difficulty / self.pauli_diff_scale;
+
+        // Generate paulis based on difficulty budget (matches Python exactly)
+        let rotations = generate_paulis_with_difficulty(
+            self.num_qubits,
+            pauli_difficulty,
+            self.final_pauli_layers,
+            &self.dist_pairs,
+            &self.all_dists,
+            self.num_qubits_decay,
+        );
+
+        // Generate random Clifford tableau directly (matches Python's generator.generate())
+        // This applies random H/S/CX to identity, not via step()
+        let tableau = random_clifford_tableau(self.num_qubits, self.difficulty, &self.valid_pairs);
+
         self.rebuild_network(tableau, rotations);
 
         // Clean initially trivial rotations (like Python does)
         self.network.clean_and_return_with_phases();
-
-        self.depth = self.max_depth;
-        self.success = self.network.solved();
-        self.metrics.reset();
-        self.metrics_values = self.metrics.snapshot();
-        self.reward_value = if self.success { 1.0 } else { 0.0 };
-
-        if self.gate_count() == 0 {
-            return;
-        }
-
-        let mut rng = rand::thread_rng();
-        let action_range = Uniform::new(0, self.num_actions());
-        for _ in 0..self.difficulty {
-            let action = action_range.sample(&mut rng);
-            self.step(action);
-        }
 
         self.depth = (self.depth_slope * self.difficulty).min(self.max_depth);
         self.success = self.network.solved();
@@ -284,13 +560,26 @@ impl Env for PauliEnv {
             penalty = new_metrics.weighted_delta(&previous, &self.metrics_weights);
             self.metrics_values = new_metrics;
 
-            // act() returns rotations that became trivial
+            // act() returns rotations that became trivial: (Axis, qubit, rotation_index)
             let applied_rotations = self.network.act(&gate);
             new_rotations = applied_rotations.len();
-        }
 
-        if self.track_solution {
-            self.solution.push(action);
+            if self.track_solution {
+                // Record the gate action
+                self.solution.push(SolutionStep::Gate(action));
+
+                // Record each rotation that became trivial with its phase
+                for (axis, qubit, rot_idx) in applied_rotations.iter() {
+                    let phase = self.network.rotation_qk[*rot_idx].phase();
+                    let phase_mult = if phase == 2 { -1 } else { 1 };
+                    self.solution.push(SolutionStep::Rotation {
+                        axis: axis.clone(),
+                        qubit: *qubit,
+                        index: *rot_idx,
+                        phase_mult,
+                    });
+                }
+            }
         }
 
         self.depth = self.depth.saturating_sub(1);
@@ -333,7 +622,35 @@ impl Env for PauliEnv {
     }
 
     fn solution(&self) -> Vec<usize> {
-        self.solution.clone()
+        // Return only the gate action indices for trait compatibility
+        self.solution
+            .iter()
+            .filter_map(|step| match step {
+                SolutionStep::Gate(action) => Some(*action),
+                SolutionStep::Rotation { .. } => None,
+            })
+            .collect()
+    }
+}
+
+impl PauliEnv {
+    /// Returns the full solution including both gate actions and rotation steps.
+    /// Each step is encoded as a tuple for Python consumption.
+    pub fn full_solution(&self) -> Vec<(String, usize, usize, i32)> {
+        self.solution
+            .iter()
+            .map(|step| match step {
+                SolutionStep::Gate(action) => ("gate".to_string(), *action, 0, 0),
+                SolutionStep::Rotation { axis, qubit, index, phase_mult } => {
+                    let axis_str = match axis {
+                        Axis::X => "rx",
+                        Axis::Y => "ry",
+                        Axis::Z => "rz",
+                    };
+                    (axis_str.to_string(), *qubit, *index, *phase_mult)
+                }
+            })
+            .collect()
     }
 }
 
@@ -350,6 +667,9 @@ impl PyPauliEnv {
         depth_slope,
         max_depth,
         max_rotations,
+        pauli_diff_scale=None,
+        num_qubits_decay=None,
+        final_pauli_layers=None,
         metrics_weights=None,
         add_perms=None,
         pauli_layer_reward=None,
@@ -362,12 +682,17 @@ impl PyPauliEnv {
         depth_slope: usize,
         max_depth: usize,
         max_rotations: usize,
+        pauli_diff_scale: Option<usize>,
+        num_qubits_decay: Option<f32>,
+        final_pauli_layers: Option<usize>,
         metrics_weights: Option<HashMap<String, f32>>,
         add_perms: Option<bool>,
         pauli_layer_reward: Option<f32>,
         track_solution: Option<bool>,
     ) -> (Self, PyBaseEnv) {
         let weights = MetricsWeights::from_hashmap(metrics_weights);
+        // Default final_pauli_layers to max_rotations + 2 (like Python's horizon + 2)
+        let final_layers = final_pauli_layers.unwrap_or(max_rotations + 2);
         let env = PauliEnv::new(
             num_qubits,
             difficulty,
@@ -375,6 +700,9 @@ impl PyPauliEnv {
             depth_slope,
             max_depth,
             max_rotations,
+            pauli_diff_scale.unwrap_or(8), // Default matches Python's lf_diff_scale
+            num_qubits_decay.unwrap_or(0.5), // Default matches Python
+            final_layers,
             weights,
             add_perms.unwrap_or(true),
             pauli_layer_reward.unwrap_or(0.01),
@@ -382,5 +710,18 @@ impl PyPauliEnv {
         );
         let env = Box::new(env);
         (PyPauliEnv, PyBaseEnv { env })
+    }
+
+    /// Returns the full solution including gate actions and rotation steps.
+    /// Each element is a tuple: (type, arg1, arg2, arg3)
+    /// - For gates: ("gate", action_index, 0, 0)
+    /// - For rotations: ("rx"/"ry"/"rz", qubit, rotation_index, phase_mult)
+    pub fn full_solution(self_: PyRef<'_, Self>) -> Vec<(String, usize, usize, i32)> {
+        let base = self_.as_ref();
+        if let Some(pauli_env) = base.env.as_any().downcast_ref::<PauliEnv>() {
+            pauli_env.full_solution()
+        } else {
+            Vec::new()
+        }
     }
 }
