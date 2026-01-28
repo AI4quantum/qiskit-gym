@@ -513,6 +513,9 @@ impl Env for PauliEnv {
         self.metrics.reset();
         self.metrics_values = self.metrics.snapshot();
         self.reward_value = if self.success { 1.0 } else { 0.0 };
+        if self.track_solution {
+            self.solution = Vec::new();
+        }
     }
 
     fn reset(&mut self) {
@@ -622,32 +625,27 @@ impl Env for PauliEnv {
     }
 
     fn solution(&self) -> Vec<usize> {
-        // Return only the gate action indices for trait compatibility
-        self.solution
-            .iter()
-            .filter_map(|step| match step {
-                SolutionStep::Gate(action) => Some(*action),
-                SolutionStep::Rotation { .. } => None,
-            })
-            .collect()
-    }
-}
+        // Encode both gates and rotations in Vec<usize> using a marker scheme:
+        // - Gate actions: just the action index (< ROTATION_MARKER)
+        // - Rotations: ROTATION_MARKER | axis(2 bits) | qubit(10 bits) | index(10 bits) | phase(1 bit)
+        const ROTATION_MARKER: usize = 0x80000000; // 2^31
 
-impl PauliEnv {
-    /// Returns the full solution including both gate actions and rotation steps.
-    /// Each step is encoded as a tuple for Python consumption.
-    pub fn full_solution(&self) -> Vec<(String, usize, usize, i32)> {
         self.solution
             .iter()
             .map(|step| match step {
-                SolutionStep::Gate(action) => ("gate".to_string(), *action, 0, 0),
+                SolutionStep::Gate(action) => *action,
                 SolutionStep::Rotation { axis, qubit, index, phase_mult } => {
-                    let axis_str = match axis {
-                        Axis::X => "rx",
-                        Axis::Y => "ry",
-                        Axis::Z => "rz",
+                    let axis_code: usize = match axis {
+                        Axis::X => 0,
+                        Axis::Y => 1,
+                        Axis::Z => 2,
                     };
-                    (axis_str.to_string(), *qubit, *index, *phase_mult)
+                    let phase_code: usize = if *phase_mult == 1 { 1 } else { 0 };
+                    ROTATION_MARKER
+                        | (axis_code << 21)  // bits 21-22
+                        | (*qubit << 11)     // bits 11-20
+                        | (*index << 1)      // bits 1-10
+                        | phase_code         // bit 0
                 }
             })
             .collect()
@@ -710,18 +708,5 @@ impl PyPauliEnv {
         );
         let env = Box::new(env);
         (PyPauliEnv, PyBaseEnv { env })
-    }
-
-    /// Returns the full solution including gate actions and rotation steps.
-    /// Each element is a tuple: (type, arg1, arg2, arg3)
-    /// - For gates: ("gate", action_index, 0, 0)
-    /// - For rotations: ("rx"/"ry"/"rz", qubit, rotation_index, phase_mult)
-    pub fn full_solution(self_: PyRef<'_, Self>) -> Vec<(String, usize, usize, i32)> {
-        let base = self_.as_ref();
-        if let Some(pauli_env) = base.env.as_any().downcast_ref::<PauliEnv>() {
-            pauli_env.full_solution()
-        } else {
-            Vec::new()
-        }
     }
 }
