@@ -27,6 +27,38 @@ from qiskit import QuantumCircuit
 ONE_Q_GATES = ["H", "S", "Sdg", "SX", "SXdg"]
 TWO_Q_GATES = ["CX", "CZ", "SWAP"]
 
+# Marker for encoded rotations in solution (must match Rust ROTATION_MARKER)
+ROTATION_MARKER = 0x80000000  # 2^31
+
+
+def decode_pauli_solution(encoded_solution: List[int]) -> List[Tuple[str, int, int, int]]:
+    """
+    Decode a Pauli solution encoded as Vec<usize> into the full solution format.
+
+    Encoding scheme:
+    - Gate actions: just the action index (< ROTATION_MARKER)
+    - Rotations: ROTATION_MARKER | axis(2 bits) | qubit(10 bits) | index(10 bits) | phase(1 bit)
+
+    Returns:
+        List of tuples: ("gate", action_index, 0, 0) or ("rx"/"ry"/"rz", qubit, index, phase_mult)
+    """
+    result = []
+    axis_names = ["rx", "ry", "rz"]
+
+    for val in encoded_solution:
+        if val >= ROTATION_MARKER:
+            # Decode rotation
+            axis_code = (val >> 21) & 0x3
+            qubit = (val >> 11) & 0x3FF
+            index = (val >> 1) & 0x3FF
+            phase_mult = 1 if (val & 1) else -1
+            result.append((axis_names[axis_code], qubit, index, phase_mult))
+        else:
+            # Gate action
+            result.append(("gate", val, 0, 0))
+
+    return result
+
 
 # ------------- Base Synth Env class -------------
 
@@ -102,6 +134,20 @@ class BaseSynthesisEnv(ABC):
 
     def post_process_synthesis(self, synth_circuit: QuantumCircuit, input_state):
         return synth_circuit
+
+    def build_circuit_from_solution(self, actions: List[int], input) -> QuantumCircuit:
+        """
+        Build a circuit from the solution actions.
+        Default implementation uses gate_list_to_circuit + post_process_synthesis.
+        Subclasses can override for custom handling (e.g., decoding rotations).
+        """
+        from qiskit_gym.rl.synthesis import gate_list_to_circuit
+        synth_circuit = gate_list_to_circuit(
+            [self.config["gateset"][a] for a in actions],
+            num_qubits=self.config["num_qubits"],
+        )
+        return self.post_process_synthesis(synth_circuit, input)
+
 
 # ---------------------------------------
 # ------------- Env classes -------------
@@ -261,60 +307,71 @@ class PermutationGym(PermutationEnv, BaseSynthesisEnv):
 
 PauliNetworkEnv = gym_adapter(qiskit_gym_rs.PauliNetworkEnv)
 
-def _parse_pauli_circuit(circuit: QuantumCircuit) -> Tuple[Clifford, List[str]]:
+def _make_pauli_string(num_qubits: int, qubit: int, axis: str) -> str:
+    """Create a Pauli string with a single non-identity element at the given qubit."""
+    pauli_chars = ['I'] * num_qubits
+    pauli_chars[num_qubits - 1 - qubit] = axis
+    return ''.join(pauli_chars)
+
+
+def _parse_pauli_circuit(circuit: QuantumCircuit) -> Tuple[Clifford, List[str], List]:
     """
     Parse a QuantumCircuit into its Clifford and rotation components.
-    The circuit should contain Clifford gates (h, s, sdg, sx, sxdg, cx, cz, swap)
-    and Pauli rotation gates (rx, ry, rz).
+
+    This follows the same logic as the old transpiler's PauliNetwork.from_circuit:
+    - Start with identity Clifford
+    - For rotations: create Pauli, evolve through current Clifford, store adjoint
+    - For Clifford gates: compose onto current Clifford
+
     Returns:
-        Tuple of (Clifford, list of rotation strings)
+        Tuple of (Clifford, list of evolved rotation labels, list of rotation parameters)
     """
+    from qiskit.quantum_info import Pauli
+
     num_qubits = circuit.num_qubits
-    clifford_gates = {'h', 's', 'sdg', 'sx', 'sxdg', 'cx', 'cz', 'swap', 'x', 'y', 'z'}
     rotation_gates = {'rx', 'ry', 'rz'}
-    # Build a circuit with just Clifford gates to get the Clifford
-    clifford_circuit = QuantumCircuit(num_qubits)
+
+    # Start with identity Clifford (matches old transpiler)
+    clifford = Clifford(np.eye(2 * num_qubits, dtype=bool))
     rotations = []
+    rotation_params = []
+
     for instruction in circuit.data:
         gate_name = instruction.operation.name.lower()
         qubits = [circuit.find_bit(q).index for q in instruction.qubits]
-        if gate_name in clifford_gates:
-            # Add Clifford gate to the clifford circuit
-            if gate_name == 'h':
-                clifford_circuit.h(qubits[0])
-            elif gate_name == 's':
-                clifford_circuit.s(qubits[0])
-            elif gate_name == 'sdg':
-                clifford_circuit.sdg(qubits[0])
-            elif gate_name == 'sx':
-                clifford_circuit.sx(qubits[0])
-            elif gate_name == 'sxdg':
-                clifford_circuit.sxdg(qubits[0])
-            elif gate_name == 'cx':
-                clifford_circuit.cx(qubits[0], qubits[1])
-            elif gate_name == 'cz':
-                clifford_circuit.cz(qubits[0], qubits[1])
-            elif gate_name == 'swap':
-                clifford_circuit.swap(qubits[0], qubits[1])
-            elif gate_name == 'x':
-                clifford_circuit.x(qubits[0])
-            elif gate_name == 'y':
-                clifford_circuit.y(qubits[0])
-            elif gate_name == 'z':
-                clifford_circuit.z(qubits[0])
-        elif gate_name in rotation_gates:
-            # Extract rotation as Pauli string
-            qubit = qubits[0]
-            pauli_chars = ['I'] * num_qubits
-            if gate_name == 'rx':
-                pauli_chars[num_qubits - 1 - qubit] = 'X'
-            elif gate_name == 'ry':
-                pauli_chars[num_qubits - 1 - qubit] = 'Y'
-            elif gate_name == 'rz':
-                pauli_chars[num_qubits - 1 - qubit] = 'Z'
-            rotations.append(''.join(pauli_chars))
-    clifford = Clifford(clifford_circuit) if clifford_circuit.data else Clifford(np.eye(2 * num_qubits, dtype=int))
-    return clifford, rotations
+
+        if gate_name in rotation_gates:
+            # Create Pauli string for this rotation
+            axis = gate_name[1].upper()  # 'rx' -> 'X', 'ry' -> 'Y', 'rz' -> 'Z'
+            pauli_str = _make_pauli_string(num_qubits, qubits[0], axis)
+            p = Pauli(pauli_str)
+
+            # Evolve through current Clifford and store adjoint (matches old transpiler)
+            p = p.evolve(clifford)
+            rotations.append(p.adjoint().to_label())
+            rotation_params.extend(instruction.operation.params)
+
+        else:
+            # Compose Clifford gate onto current Clifford
+            try:
+                clifford = clifford.compose(instruction.operation, qubits)
+            except Exception:
+                raise TypeError(
+                    f"Gate {gate_name} on qubits {qubits} not supported."
+                )
+
+    # Return clifford (adjoint will be applied in get_state)
+    return clifford, rotations, rotation_params
+
+
+def _just_clifford(circuit: QuantumCircuit) -> QuantumCircuit:
+    """Extract only Clifford gates from a circuit (removes rx, ry, rz)."""
+    circuit_out = QuantumCircuit.copy_empty_like(circuit)
+    for g in circuit:
+        if g.operation.name not in {"rx", "ry", "rz"}:
+            circuit_out.append(g.operation, g.qubits)
+    return circuit_out
+
 
 class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
     cls_name = "PauliNetworkEnv"
@@ -351,6 +408,8 @@ class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
             "pauli_layer_reward": pauli_layer_reward,
             "track_solution": track_solution,
         })
+        self._rotation_params = []
+        self._original_circuit = None
 
     def get_state(self, input, rotations: List[str] = None):
         """
@@ -369,17 +428,28 @@ class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
         """
         if isinstance(input, tuple):
             clifford, rotations = input
+            # Tuple input: assume clifford is already in correct form (adjoint)
+            clifford_for_state = clifford
+            self._rotation_params = []
+            self._original_circuit = None
         elif isinstance(input, QuantumCircuit):
-            clifford, rotations = _parse_pauli_circuit(input)
+            clifford, rotations, rotation_params = _parse_pauli_circuit(input)
+            clifford_for_state = clifford.adjoint()
+            self._rotation_params = rotation_params
+            self._original_circuit = input
         elif isinstance(input, Clifford):
             clifford = input
             if rotations is None:
                 rotations = []
+            # Raw Clifford: need to take adjoint
+            clifford_for_state = clifford.adjoint()
+            self._rotation_params = []
+            self._original_circuit = None
         else:
             raise ValueError(f"Unsupported input type: {type(input)}")
 
         # State format: [rotation_count, tableau..., len1, chars1..., len2, chars2..., ...]
-        tableau = clifford.adjoint().tableau[:, :-1].T.flatten().astype(int).tolist()
+        tableau = clifford_for_state.tableau[:, :-1].T.flatten().astype(int).tolist()
 
         state = [len(rotations)]
         state.extend(tableau)
@@ -389,14 +459,61 @@ class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
             state.extend([ord(c) for c in rot])
 
         return state
-    
-    # def post_process_synthesis(self, synth_circuit: QuantumCircuit, input):
-    #     synth_circuit = synth_circuit.inverse()
-    #     if isinstance(input, QuantumCircuit):
-    #         input = Clifford(input)
-    #     dcliff = Clifford(synth_circuit).compose(input)
-    #     out = _solve_phases(dcliff).compose(synth_circuit).inverse()
-    #     return out
+
+    def post_process_synthesis(
+        self,
+        full_solution: List[Tuple[str, int, int, int]],
+        input,
+    ) -> QuantumCircuit:
+        """
+        Reconstruct circuit from synthesis solution with rotation parameters.
+
+        Args:
+            full_solution: List of (type, arg1, arg2, arg3) tuples from full_solution()
+                - For gates: ("gate", action_index, 0, 0)
+                - For rotations: ("rx"/"ry"/"rz", qubit, rotation_index, phase_mult)
+            input: Original input (QuantumCircuit or tuple)
+
+        Returns:
+            Reconstructed QuantumCircuit with rotations and phase correction
+        """
+        num_qubits = self.config["num_qubits"]
+        circuit = QuantumCircuit(num_qubits)
+
+        for step_type, arg1, arg2, arg3 in full_solution:
+            if step_type == "gate":
+                gate_name, gate_args = self.config["gateset"][arg1]
+                # CX qubits need to be reversed to match transpiler's to_circuit convention
+                if gate_name.lower() == "cx":
+                    circuit.cx(*gate_args[::-1])
+                else:
+                    getattr(circuit, gate_name.lower())(*gate_args)
+            elif step_type in ("rx", "ry", "rz"):
+                qubit, rotation_index, phase_mult = arg1, arg2, arg3
+                if rotation_index < len(self._rotation_params):
+                    angle = phase_mult * self._rotation_params[rotation_index]
+                else:
+                    raise Exception("Too few rotation parameters stored for synthesis!")
+                    angle = phase_mult * (np.pi / 2)  # fallback
+                getattr(circuit, step_type)(angle, qubit)
+
+        # Phase correction - use input if it's a QuantumCircuit, otherwise stored circuit
+        original_circuit = input if isinstance(input, QuantumCircuit) else self._original_circuit
+        if original_circuit is not None:
+            phase_correction = Clifford(
+                _just_clifford(circuit.inverse().compose(original_circuit))
+            ).to_circuit()
+            circuit = circuit.compose(phase_correction)
+
+        return circuit
+
+    def build_circuit_from_solution(self, actions: List[int], input) -> QuantumCircuit:
+        """
+        Build circuit from encoded solution (gates + rotations).
+        Decodes the solution and calls post_process_synthesis.
+        """
+        full_solution = decode_pauli_solution(actions)
+        return self.post_process_synthesis(full_solution, input)
 
 
 # ---------------------------------------

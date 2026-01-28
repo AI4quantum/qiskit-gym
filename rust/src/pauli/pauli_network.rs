@@ -194,13 +194,13 @@ impl PauliNetwork {
     }
 
     fn cnot(&mut self, i: usize, j: usize) -> Vec<(Axis, usize, usize)> {
-        // i = control, j = target
-        // CX conjugation: X_target += X_control, Z_control += Z_target
-        self.xor_rows(j, i);  // target row += control row (X part)
-        self.xor_rows(self.num_qubits + i, self.num_qubits + j);  // control+n row += target+n row (Z part)
+        // Match transpiler's convention exactly:
+        // row[i] ^= row[j], row[n+j] ^= row[n+i], evolve_cx(j, i)
+        self.xor_rows(i, j);
+        self.xor_rows(self.num_qubits + j, self.num_qubits + i);
 
         for rotation in &mut self.rotation_qk {
-            rotation.evolve_cx(i, j);  // evolve_cx(control, target)
+            rotation.evolve_cx(j, i);
         }
 
         self.clean_and_return_with_phases()
