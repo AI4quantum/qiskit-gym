@@ -13,7 +13,6 @@ that they have been altered from the originals.
 
 use pyo3::prelude::*;
 
-use rand::distributions::{Distribution, Uniform};
 use rand::Rng;
 
 use twisterl::python_interface::env::PyBaseEnv;
@@ -21,9 +20,10 @@ use twisterl::rl::env::Env;
 
 use crate::envs::common::Gate;
 use crate::envs::metrics::{MetricsCounts, MetricsTracker, MetricsWeights};
-use crate::envs::symmetry::compute_twists_pauli;
+use crate::envs::symmetry::compute_qubit_perms;
 use crate::pauli::pauli_network::{Axis, PauliNetwork};
 use nalgebra::DMatrix;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::{HashMap, HashSet, VecDeque, BTreeMap};
 
 /// Represents a step in the Pauli network synthesis solution.
@@ -318,7 +318,6 @@ fn pad_state(data: &DMatrix<u8>, max_cols: usize) -> Vec<u8> {
     dense
 }
 
-#[derive(Clone)]
 pub struct PauliEnv {
     pub network: PauliNetwork,
     pub depth: usize,
@@ -337,8 +336,12 @@ pub struct PauliEnv {
     dist_pairs: BTreeMap<usize, Vec<(usize, usize)>>,
     all_dists: Vec<usize>,
     valid_pairs: Vec<(usize, usize)>,
-    pub obs_perms: Vec<Vec<usize>>,
-    pub act_perms: Vec<Vec<usize>>,
+    // Qubit permutations (automorphisms) for internal symmetry handling
+    qubit_perms: Vec<Vec<usize>>,
+    act_perms: Vec<Vec<usize>>,
+    // Index of currently active permutation (set in observe(), used in step())
+    // Uses AtomicUsize for thread-safe interior mutability since observe() takes &self
+    current_perm_idx: AtomicUsize,
     metrics: MetricsTracker,
     metrics_values: MetricsCounts,
     metrics_weights: MetricsWeights,
@@ -346,6 +349,38 @@ pub struct PauliEnv {
     pauli_layer_reward: f32,
     track_solution: bool,
     solution: Vec<SolutionStep>,
+}
+
+impl Clone for PauliEnv {
+    fn clone(&self) -> Self {
+        PauliEnv {
+            network: self.network.clone(),
+            depth: self.depth,
+            success: self.success,
+            num_qubits: self.num_qubits,
+            max_rotations: self.max_rotations,
+            difficulty: self.difficulty,
+            gateset: self.gateset.clone(),
+            depth_slope: self.depth_slope,
+            max_depth: self.max_depth,
+            pauli_diff_scale: self.pauli_diff_scale,
+            num_qubits_decay: self.num_qubits_decay,
+            final_pauli_layers: self.final_pauli_layers,
+            dist_pairs: self.dist_pairs.clone(),
+            all_dists: self.all_dists.clone(),
+            valid_pairs: self.valid_pairs.clone(),
+            qubit_perms: self.qubit_perms.clone(),
+            act_perms: self.act_perms.clone(),
+            current_perm_idx: AtomicUsize::new(self.current_perm_idx.load(Ordering::Relaxed)),
+            metrics: self.metrics.clone(),
+            metrics_values: self.metrics_values.clone(),
+            metrics_weights: self.metrics_weights.clone(),
+            reward_value: self.reward_value,
+            pauli_layer_reward: self.pauli_layer_reward,
+            track_solution: self.track_solution,
+            solution: self.solution.clone(),
+        }
+    }
 }
 
 impl PauliEnv {
@@ -382,8 +417,8 @@ impl PauliEnv {
         let (dist_pairs, all_dists) = build_dist_pairs(num_qubits, &distances);
 
         // Only compute symmetries if enabled
-        let (obs_perms, act_perms) = if add_perms {
-            compute_twists_pauli(num_qubits, &gateset, max_rotations)
+        let (qubit_perms, act_perms) = if add_perms {
+            compute_qubit_perms(num_qubits, &gateset)
         } else {
             (Vec::new(), Vec::new())
         };
@@ -407,8 +442,9 @@ impl PauliEnv {
             dist_pairs,
             all_dists,
             valid_pairs,
-            obs_perms,
+            qubit_perms,
             act_perms,
+            current_perm_idx: AtomicUsize::new(0),
             metrics,
             metrics_values,
             metrics_weights,
@@ -449,6 +485,50 @@ impl PauliEnv {
 
     fn gate_count(&self) -> usize {
         self.gateset.len()
+    }
+
+    /// Apply qubit permutation to a dense observation matrix.
+    /// Follows the same logic as the old transpiler's get_observation().
+    fn apply_perm_to_obs(&self, dense: &[u8], perm: &[usize]) -> Vec<u8> {
+        let n = self.num_qubits;
+        let rows = 2 * n;
+        let total_cols = 2 * n + self.max_rotations;
+        let mut temp = vec![0u8; rows * total_cols];
+        let mut result = vec![0u8; rows * total_cols];
+
+        // First pass: permute rows (copy entire rows including rotation columns)
+        // Row i (X part) gets data from row perm[i]
+        // Row n+i (Z part) gets data from row n + perm[i]
+        for i in 0..n {
+            let src_row_x = perm[i];
+            let src_row_z = n + perm[i];
+            let dst_row_x = i;
+            let dst_row_z = n + i;
+            for c in 0..total_cols {
+                temp[dst_row_x * total_cols + c] = dense[src_row_x * total_cols + c];
+                temp[dst_row_z * total_cols + c] = dense[src_row_z * total_cols + c];
+            }
+        }
+
+        // Second pass: permute columns (only Clifford tableau part, not rotation columns)
+        // Column i (X part) gets data from column perm[i]
+        // Column n+i (Z part) gets data from column n + perm[i]
+        for r in 0..rows {
+            for i in 0..n {
+                let src_col_x = perm[i];
+                let src_col_z = n + perm[i];
+                let dst_col_x = i;
+                let dst_col_z = n + i;
+                result[r * total_cols + dst_col_x] = temp[r * total_cols + src_col_x];
+                result[r * total_cols + dst_col_z] = temp[r * total_cols + src_col_z];
+            }
+            // Copy rotation columns unchanged
+            for c in (2 * n)..total_cols {
+                result[r * total_cols + c] = temp[r * total_cols + c];
+            }
+        }
+
+        result
     }
 
     fn rebuild_network(&mut self, tableau: Vec<u8>, rotations: Vec<String>) {
@@ -556,7 +636,16 @@ impl Env for PauliEnv {
         let mut penalty = 0.0f32;
         let mut new_rotations = 0usize;
 
-        if let Some(gate) = self.gateset.get(action).cloned() {
+        // Un-permute the action if permutations are enabled
+        // The model outputs an action in the permuted space; we need the actual action
+        let actual_action = if !self.act_perms.is_empty() {
+            let perm_idx = self.current_perm_idx.load(Ordering::Relaxed);
+            self.act_perms[perm_idx][action]
+        } else {
+            action
+        };
+
+        if let Some(gate) = self.gateset.get(actual_action).cloned() {
             let previous = self.metrics_values.clone();
             self.metrics.apply_gate(&gate);
             let new_metrics = self.metrics.snapshot();
@@ -568,8 +657,8 @@ impl Env for PauliEnv {
             new_rotations = applied_rotations.len();
 
             if self.track_solution {
-                // Record the gate action
-                self.solution.push(SolutionStep::Gate(action));
+                // Record the actual gate action (not the permuted one)
+                self.solution.push(SolutionStep::Gate(actual_action));
 
                 // Record each rotation that became trivial with its phase
                 for (axis, qubit, rot_idx) in applied_rotations.iter() {
@@ -609,7 +698,21 @@ impl Env for PauliEnv {
     }
 
     fn observe(&self) -> Vec<usize> {
-        self.pad_and_collect()
+        let dense = self.pad_and_collect();
+
+        // Apply permutation if we have any
+        let permuted = if !self.qubit_perms.is_empty() {
+            // Pick a random permutation
+            let mut rng = rand::thread_rng();
+            let perm_idx = rng.gen_range(0..self.qubit_perms.len());
+            self.current_perm_idx.store(perm_idx, Ordering::Relaxed);
+            self.apply_perm_to_obs(&dense, &self.qubit_perms[perm_idx])
+        } else {
+            dense
+        };
+
+        // Convert to sparse format
+        permuted
             .iter()
             .enumerate()
             .filter_map(|(idx, &val)| if val > 0 { Some(idx) } else { None })
@@ -617,7 +720,9 @@ impl Env for PauliEnv {
     }
 
     fn twists(&self) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
-        (self.obs_perms.clone(), self.act_perms.clone())
+        // Return empty - PauliEnv handles permutations internally in observe()/step()
+        // This prevents twisterl from applying additional permutations
+        (Vec::new(), Vec::new())
     }
 
     fn track_solution(&self) -> bool {

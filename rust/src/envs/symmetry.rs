@@ -350,3 +350,61 @@ pub fn compute_twists_pauli(
         obs_perm_pauli(num_qubits, max_rotations, perm)
     })
 }
+
+/// Compute qubit permutations and action permutations for PauliEnv internal symmetry handling.
+/// Returns (qubit_perms, act_perms) where qubit_perms are the raw automorphisms (size num_qubits).
+pub fn compute_qubit_perms(
+    num_qubits: usize,
+    gateset: &[Gate],
+) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
+    if num_qubits == 0 {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut gate_index: HashMap<GateKey, usize> = HashMap::new();
+    for (idx, gate) in gateset.iter().enumerate() {
+        let kind = gate_kind(gate);
+        let qubits = gate_qubits(gate);
+        let key = canonical_key(kind, qubits);
+        gate_index.insert(key, idx);
+    }
+
+    let mut adjacency = vec![vec![false; num_qubits]; num_qubits];
+    let mut has_edge = false;
+
+    for gate in gateset {
+        if let Some((q1, q2)) = two_qubit_targets(gate) {
+            if q1 != q2 {
+                adjacency[q1][q2] = true;
+                adjacency[q2][q1] = true;
+                has_edge = true;
+            }
+        }
+    }
+
+    let automorphisms = compute_automorphisms(&adjacency, has_edge);
+
+    let mut seen: HashSet<Vec<usize>> = HashSet::new();
+    let mut qubit_perms: Vec<Vec<usize>> = Vec::new();
+    let mut act_perms: Vec<Vec<usize>> = Vec::new();
+
+    for perm in automorphisms {
+        if !seen.insert(perm.clone()) {
+            continue;
+        }
+        if let Some(act_perm) = build_action_perm(gateset, &gate_index, &perm) {
+            qubit_perms.push(perm);
+            act_perms.push(act_perm);
+        }
+    }
+
+    if qubit_perms.is_empty() {
+        let identity = identity_perm(num_qubits);
+        if let Some(act_perm) = build_action_perm(gateset, &gate_index, &identity) {
+            qubit_perms.push(identity);
+            act_perms.push(act_perm);
+        }
+    }
+
+    (qubit_perms, act_perms)
+}
