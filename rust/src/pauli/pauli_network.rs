@@ -249,9 +249,11 @@ impl PauliNetwork {
             }
             Gate::SWAP(q0, q1) => {
                 // SWAP = CX CX CX (alternating directions)
-                self.cnot(*q0, *q1);
-                self.cnot(*q1, *q0);
-                return self.cnot(*q0, *q1);
+                let mut rotations = Vec::new();
+                rotations.extend(self.cnot(*q0, *q1));
+                rotations.extend(self.cnot(*q1, *q0));
+                rotations.extend(self.cnot(*q0, *q1));
+                return rotations;
             }
         }
         Vec::new()
@@ -386,5 +388,24 @@ mod tests {
         assert_eq!(r_qubits[0].0, Axis::Y);
         assert_eq!(r_qubits[0].1, 1);
         assert_eq!(r_qubits[0].2, 0);
+    }
+
+    #[test]
+    fn test_swap_accumulates_trivial_rotations() {
+        let target_clifford = DMatrix::<u8>::identity(4, 4);
+        let rotations = vec!["XI".to_string()];
+        let base = PauliNetwork::new(target_clifford.data.as_slice().to_vec(), rotations);
+
+        let mut sequential = base.clone();
+        let mut expected = Vec::new();
+        expected.extend(sequential.act(&Gate::CX(0, 1)));
+        expected.extend(sequential.act(&Gate::CX(1, 0)));
+        expected.extend(sequential.act(&Gate::CX(0, 1)));
+        assert!(!expected.is_empty());
+
+        let mut swapped = base.clone();
+        let got = swapped.act(&Gate::SWAP(0, 1));
+
+        assert_eq!(got, expected);
     }
 }
