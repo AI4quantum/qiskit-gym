@@ -119,29 +119,6 @@ impl Permutation {
         }
     }
 
-    /// Compute the inverse of a permutation
-    /// For a permutation perm, returns inv such that perm[inv[i]] = i for all i
-    fn invert_perm(perm: &[usize]) -> Vec<usize> {
-        let mut inv = vec![0; perm.len()];
-        for (i, &val) in perm.iter().enumerate() {
-            inv[val] = i;
-        }
-        inv
-    }
-
-    /// Randomly invert the permutation with 50% probability when enabled.
-    fn maybe_random_invert(&mut self) {
-        if !self.add_inverts {
-            return;
-        }
-
-        let mut rng = rand::thread_rng();
-        if rng.gen_bool(0.5) {
-            self.state = Self::invert_perm(&self.state);
-            self.inverted = !self.inverted;
-        }
-    }
-
     pub fn solved(&self) -> bool {
         for i in 0..self.state.len() {
             if self.state[i] != i {return false}
