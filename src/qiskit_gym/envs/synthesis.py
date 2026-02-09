@@ -483,7 +483,10 @@ class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
         for step_type, arg1, arg2, arg3 in full_solution:
             if step_type == "gate":
                 gate_name, gate_args = self.config["gateset"][arg1]
-                # CX qubits need to be reversed to match transpiler's to_circuit convention
+                # CX qubit order: The gateset stores CX as (control, target), but the
+                # Rust PauliNetwork.cnot() uses the opposite convention internally
+                # (it does row[i] ^= row[j] where i,j come from CX(i,j)). To produce
+                # the correct output circuit, we reverse the qubit order here.
                 if gate_name.lower() == "cx":
                     circuit.cx(*gate_args[::-1])
                 else:
@@ -494,7 +497,6 @@ class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
                     angle = phase_mult * self._rotation_params[rotation_index]
                 else:
                     raise Exception("Too few rotation parameters stored for synthesis!")
-                    angle = phase_mult * (np.pi / 2)  # fallback
                 getattr(circuit, step_type)(angle, qubit)
 
         # Phase correction - use input if it's a QuantumCircuit, otherwise stored circuit
@@ -520,11 +522,7 @@ class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
 
 SYNTH_ENVS = {
     "CliffordEnv": CliffordGym,
-    "CliffordGym": CliffordGym,
     "LinearFunctionEnv": LinearFunctionGym,
-    "LinearFunctionGym": LinearFunctionGym,
     "PermutationEnv": PermutationGym,
-    "PermutationGym": PermutationGym,
     "PauliNetworkEnv": PauliGym,
-    "PauliGym": PauliGym,
 }

@@ -187,43 +187,6 @@ fn get_pauli_under_diff(
     Some((pauli_layer.into_iter().collect(), cost))
 }
 
-/// Generate random Pauli rotations with random weights (for pauli_difficulty=None case)
-/// This matches the Python PauliNetworkGenerator behavior when difficulty is None
-fn random_rotations(num_qubits: usize, rotation_count: usize) -> Vec<String> {
-    if rotation_count == 0 || num_qubits == 0 {
-        return Vec::new();
-    }
-    let mut rng = rand::thread_rng();
-    let axes = ['X', 'Y', 'Z'];
-
-    (0..rotation_count)
-        .map(|_| {
-            // Generate Pauli label with random weight (1 to num_qubits-1)
-            // Matches Python: pauli_weight = np.random.randint(1, self.num_qubits)
-            let mut pauli_layer = vec!['I'; num_qubits];
-            let pauli_weight = if num_qubits > 1 {
-                rng.gen_range(1..num_qubits)
-            } else {
-                1
-            };
-
-            // Choose random positions without replacement (partial Fisher-Yates)
-            let mut positions: Vec<usize> = (0..num_qubits).collect();
-            for i in 0..pauli_weight {
-                let j = rng.gen_range(i..num_qubits);
-                positions.swap(i, j);
-            }
-
-            // Assign random Pauli types to selected positions
-            for &pos in positions.iter().take(pauli_weight) {
-                pauli_layer[pos] = axes[rng.gen_range(0..axes.len())];
-            }
-
-            pauli_layer.into_iter().collect()
-        })
-        .collect()
-}
-
 /// Generate paulis based on difficulty budget (matches Python's generate() method)
 fn generate_paulis_with_difficulty(
     num_qubits: usize,
@@ -307,17 +270,6 @@ fn random_clifford_tableau(num_qubits: usize, difficulty: usize, valid_pairs: &[
     data
 }
 
-fn pad_state(data: &DMatrix<u8>, max_cols: usize) -> Vec<u8> {
-    let rows = data.nrows();
-    let mut dense = vec![0u8; rows * max_cols];
-    for c in 0..data.ncols().min(max_cols) {
-        for r in 0..rows {
-            dense[r * max_cols + c] = data[(r, c)];
-        }
-    }
-    dense
-}
-
 pub struct PauliEnv {
     pub network: PauliNetwork,
     pub depth: usize,
@@ -340,7 +292,8 @@ pub struct PauliEnv {
     qubit_perms: Vec<Vec<usize>>,
     act_perms: Vec<Vec<usize>>,
     // Index of currently active permutation (set in observe(), used in step())
-    // Uses AtomicUsize for thread-safe interior mutability since observe() takes &self
+    // Uses AtomicUsize for interior mutability since observe() takes &self
+    // (AtomicUsize required because Env trait bounds require Sync)
     current_perm_idx: AtomicUsize,
     metrics: MetricsTracker,
     metrics_values: MetricsCounts,
@@ -733,6 +686,15 @@ impl Env for PauliEnv {
         // Encode both gates and rotations in Vec<usize> using a marker scheme:
         // - Gate actions: just the action index (< ROTATION_MARKER)
         // - Rotations: ROTATION_MARKER | axis(2 bits) | qubit(10 bits) | index(10 bits) | phase(1 bit)
+        //
+        // Bit layout for rotations (from MSB to LSB):
+        //   bit 31:    ROTATION_MARKER flag (distinguishes from gate actions)
+        //   bits 21-22: axis (0=X, 1=Y, 2=Z) - max 3
+        //   bits 11-20: qubit index - max 1023 qubits
+        //   bits 1-10:  rotation index - max 1023 rotations
+        //   bit 0:      phase (1 = +1, 0 = -1)
+        //
+        // This encoding must match decode_pauli_solution() in Python.
         const ROTATION_MARKER: usize = 0x80000000; // 2^31
 
         self.solution
