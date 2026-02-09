@@ -531,8 +531,8 @@ impl Env for PauliEnv {
             let len = iter.next().unwrap_or(0).max(0) as usize;
             let mut chars = Vec::with_capacity(len);
             for _ in 0..len {
-                let ch = iter.next().unwrap_or(73); // 'I'
-                let c = char::from_u32(ch as u32).unwrap_or('I');
+                let ch = iter.next().expect("malformed state: not enough characters for rotation string");
+                let c = char::from_u32(ch as u32).expect("malformed state: invalid character code");
                 chars.push(c);
             }
             if idx < self.max_rotations {
