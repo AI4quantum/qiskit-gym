@@ -22,6 +22,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 from qiskit import QuantumCircuit
+from qiskit.exceptions import QiskitError
 
 
 ONE_Q_GATES = ["H", "S", "Sdg", "SX", "SXdg"]
@@ -127,12 +128,11 @@ class BaseSynthesisEnv(ABC):
         filtered_config = {k: v for k, v in env_config.items() if k in valid_params}
         return cls(**filtered_config)
 
-    @classmethod
     @abstractmethod
-    def get_state(cls, input):
+    def get_state(self, input):
         pass
 
-    def post_process_synthesis(self, synth_circuit: QuantumCircuit, input_state):
+    def post_process_synthesis(self, synth_circuit: QuantumCircuit, _input_state):
         return synth_circuit
 
     def build_circuit_from_solution(self, actions: List[int], input) -> QuantumCircuit:
@@ -355,7 +355,7 @@ def _parse_pauli_circuit(circuit: QuantumCircuit) -> Tuple[Clifford, List[str], 
             # Compose Clifford gate onto current Clifford
             try:
                 clifford = clifford.compose(instruction.operation, qubits)
-            except Exception:
+            except QiskitError:
                 raise TypeError(
                     f"Gate {gate_name} on qubits {qubits} not supported."
                 )
@@ -460,7 +460,7 @@ class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
 
         return state
 
-    def post_process_synthesis(
+    def _reconstruct_circuit_from_solution(
         self,
         full_solution: List[Tuple[str, int, int, int]],
         input,
@@ -512,10 +512,10 @@ class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
     def build_circuit_from_solution(self, actions: List[int], input) -> QuantumCircuit:
         """
         Build circuit from encoded solution (gates + rotations).
-        Decodes the solution and calls post_process_synthesis.
+        Decodes the solution and reconstructs the circuit.
         """
         full_solution = decode_pauli_solution(actions)
-        return self.post_process_synthesis(full_solution, input)
+        return self._reconstruct_circuit_from_solution(full_solution, input)
 
 
 # ---------------------------------------

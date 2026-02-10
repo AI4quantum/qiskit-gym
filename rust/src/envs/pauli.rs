@@ -592,7 +592,7 @@ impl Env for PauliEnv {
         // Un-permute the action if permutations are enabled
         // The model outputs an action in the permuted space; we need the actual action
         let actual_action = if !self.act_perms.is_empty() {
-            let perm_idx = self.current_perm_idx.load(Ordering::Relaxed);
+            let perm_idx = self.current_perm_idx.load(Ordering::Acquire);
             self.act_perms[perm_idx][action]
         } else {
             action
@@ -658,7 +658,7 @@ impl Env for PauliEnv {
             // Pick a random permutation
             let mut rng = rand::thread_rng();
             let perm_idx = rng.gen_range(0..self.qubit_perms.len());
-            self.current_perm_idx.store(perm_idx, Ordering::Relaxed);
+            self.current_perm_idx.store(perm_idx, Ordering::Release);
             self.apply_perm_to_obs(&dense, &self.qubit_perms[perm_idx])
         } else {
             dense

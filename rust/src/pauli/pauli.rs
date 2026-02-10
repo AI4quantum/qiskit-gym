@@ -14,17 +14,26 @@ that they have been altered from the originals.
 use regex::Regex;
 use std::collections::HashMap;
 use std::error::Error;
+use std::sync::OnceLock;
 
-lazy_static::lazy_static! {
-    static ref VALID_LABEL_PATTERN: Regex = Regex::new(r"^(?P<coeff>[+-]?[ij1]?)(?P<pauli>[IXYZ]*)$").unwrap();
-    static ref CANONICAL_PHASE_LABEL: HashMap<&'static str, i32> = {
+static VALID_LABEL_PATTERN: OnceLock<Regex> = OnceLock::new();
+static CANONICAL_PHASE_LABEL: OnceLock<HashMap<&'static str, i32>> = OnceLock::new();
+
+fn get_valid_label_pattern() -> &'static Regex {
+    VALID_LABEL_PATTERN.get_or_init(|| {
+        Regex::new(r"^(?P<coeff>[+-]?[ij1]?)(?P<pauli>[IXYZ]*)$").unwrap()
+    })
+}
+
+fn get_canonical_phase_label() -> &'static HashMap<&'static str, i32> {
+    CANONICAL_PHASE_LABEL.get_or_init(|| {
         let mut m = HashMap::new();
         m.insert("", 0);
         m.insert("-i", 1);
         m.insert("-", 2);
         m.insert("i", 3);
         m
-    };
+    })
 }
 
 #[derive(Clone)]
@@ -37,16 +46,16 @@ pub struct Pauli {
 
 impl Pauli {
     pub fn from_label(label: &str) -> Result<Pauli, Box<dyn Error>> {
-        let captures = match VALID_LABEL_PATTERN.captures(label) {
+        let captures = match get_valid_label_pattern().captures(label) {
             Some(caps) => caps,
             None => return Err("Pauli string label is not valid.".into()),
         };
 
         let coeff = captures.name("coeff").map_or("", |m| m.as_str());
         let canonical_coeff = coeff.replace("1", "").replace("+", "").replace("j", "i");
-        let phase = *CANONICAL_PHASE_LABEL
+        let phase = *get_canonical_phase_label()
             .get(&canonical_coeff as &str)
-            .unwrap();
+            .ok_or("unknown phase coefficient")?;
 
         // Convert to Symplectic representation
         let pauli_str = captures.name("pauli").map_or("", |m| m.as_str());

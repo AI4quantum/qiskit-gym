@@ -302,55 +302,6 @@ pub fn compute_twists_clifford(num_qubits: usize, gateset: &[Gate]) -> (Vec<Vec<
     compute_twists_with_builder(num_qubits, gateset, |perm| obs_perm_clifford(num_qubits, perm))
 }
 
-fn obs_perm_pauli(num_qubits: usize, max_rotations: usize, perm: &[usize]) -> Vec<usize> {
-    let dim = 2 * num_qubits;
-    let total_cols = dim + max_rotations;
-    let mut obs_perm = vec![0usize; dim * total_cols];
-
-    // Permute the Clifford tableau part (2N x 2N)
-    for row in 0..dim {
-        let mapped_row = if row < num_qubits {
-            perm[row]
-        } else {
-            num_qubits + perm[row - num_qubits]
-        };
-        for col in 0..dim {
-            let mapped_col = if col < num_qubits {
-                perm[col]
-            } else {
-                num_qubits + perm[col - num_qubits]
-            };
-            obs_perm[row * total_cols + col] = mapped_row * total_cols + mapped_col;
-        }
-    }
-
-    // Permute the rotation columns
-    // Each rotation column has X bits in rows 0..num_qubits and Z bits in rows num_qubits..2*num_qubits
-    for rot_col in 0..max_rotations {
-        let col = dim + rot_col;
-        for row in 0..dim {
-            let mapped_row = if row < num_qubits {
-                perm[row]
-            } else {
-                num_qubits + perm[row - num_qubits]
-            };
-            obs_perm[row * total_cols + col] = mapped_row * total_cols + col;
-        }
-    }
-
-    obs_perm
-}
-
-pub fn compute_twists_pauli(
-    num_qubits: usize,
-    gateset: &[Gate],
-    max_rotations: usize,
-) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
-    compute_twists_with_builder(num_qubits, gateset, |perm| {
-        obs_perm_pauli(num_qubits, max_rotations, perm)
-    })
-}
-
 /// Compute qubit permutations and action permutations for PauliEnv internal symmetry handling.
 /// Returns (qubit_perms, act_perms) where qubit_perms are the raw automorphisms (size num_qubits).
 pub fn compute_qubit_perms(

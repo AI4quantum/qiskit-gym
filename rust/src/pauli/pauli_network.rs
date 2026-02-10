@@ -108,7 +108,7 @@ impl PauliNetwork {
                     .iter(),
             )
             .enumerate()
-            .filter(|(_, (&x, &z))| x | z != 0)
+            .filter(|(_, (&x, &z))| (x | z) != 0)
             .map(|(i, _)| i)
             .next()
             .unwrap()
@@ -260,6 +260,6 @@ impl PauliNetwork {
     }
 }
 
-fn vec_to_dvector(vec: &Vec<bool>) -> DVector<u8> {
+fn vec_to_dvector(vec: &[bool]) -> DVector<u8> {
     DVector::from_vec(vec.iter().map(|&b| if b { 1 } else { 0 }).collect())
 }
