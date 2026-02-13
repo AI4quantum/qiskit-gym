@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "qiskit_gym"
 requires-python = ">=3.10"
-version = "0.1.0"
+version = "0.4.0"
 description = "A collection of quantum information science problems formulated as reinforcement learning environments"
 authors = [{ name = "David Kremer" }]
 readme = "README.md"
