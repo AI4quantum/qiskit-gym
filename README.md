@@ -29,12 +29,14 @@ Decompose linear Boolean functions into efficient quantum circuits using CNOT ga
 ### 🌊 **Clifford Synthesis**
 Generate optimal implementations of Clifford group elements with customizable gate sets.
 
+### 🎛️ **Pauli Network Synthesis**
+Optimize circuits containing Clifford gates and parametric rotations (RX, RY, RZ) for variational algorithms.
+
 ## 🔭 Roadmap and Vision
 There are lots of interesting quantum computing problems that can be addressed with RL. We hope to centralize the problem formulations here to make it easier for Quantum and AI researchers to collaborate in taclikng them.
 
 For future releases we plan to include envs for:
 
-- Pauli Network synthesis
 - Qubit routing
 - Clifford+T synthesis
 
