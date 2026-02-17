@@ -15,7 +15,7 @@ rand = "0.8.4"
 rayon = "1.1.0"
 petgraph = "0.6.5"
 regex = "1.11"
-twisterl = {version = "~0.5.1", features = ["python_bindings"]}
+twisterl = { path = "../../twisterl/rust", features = ["python_bindings"] }
 
 [profile.release]
 opt-level = 3

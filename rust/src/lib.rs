@@ -19,6 +19,7 @@ use crate::envs::clifford::PyCliffordEnv;
 use crate::envs::linear_function::PyLinearFunctionEnv;
 use crate::envs::pauli::PyPauliEnv;
 use crate::envs::permutation::PyPermutationEnv;
+use crate::envs::routing::PyRoutingEnv;
 
 
 #[pymodule]
@@ -27,5 +28,6 @@ fn qiskit_gym_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLinearFunctionEnv>()?;
     m.add_class::<PyPauliEnv>()?;
     m.add_class::<PyPermutationEnv>()?;
+    m.add_class::<PyRoutingEnv>()?;
     Ok(())
 }

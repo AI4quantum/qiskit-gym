@@ -15,6 +15,7 @@ pub mod clifford;
 pub mod linear_function;
 pub mod pauli;
 pub mod permutation;
+pub mod routing;
 pub mod common;
 pub mod symmetry;
 pub mod metrics;

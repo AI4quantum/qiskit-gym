@@ -148,7 +148,11 @@ class PPOConfig:
 
     # ---- curriculum
     diff_threshold: float = 0.85
+    threshold_min: float | None = None
     diff_max: int = 256
+    diff_step: int = 1
+    warmup: int = 0
+    final_diff_is_none: bool = False
     diff_metric: str = "ppo_deterministic"
 
     # ---- evals & logging
@@ -181,8 +185,14 @@ class PPOConfig:
             raise ValueError("clip_ratio must be > 0")
         if not (0.0 <= self.diff_threshold <= 1.0):
             raise ValueError("diff_threshold must be in [0, 1]")
+        if self.threshold_min is not None and not (0.0 <= self.threshold_min <= 1.0):
+            raise ValueError("threshold_min must be in [0, 1] when provided")
         if self.diff_max < 1:
             raise ValueError("diff_max must be >= 1")
+        if self.diff_step < 1:
+            raise ValueError("diff_step must be >= 1")
+        if self.warmup < 0:
+            raise ValueError("warmup must be >= 0")
         if self.diff_metric not in self.evals:
             raise ValueError(
                 f"diff_metric '{self.diff_metric}' not found in evals: {list(self.evals.keys())}"
@@ -228,7 +238,11 @@ class PPOConfig:
             },
             "learning": {
                 "diff_threshold": self.diff_threshold,
+                "threshold_min": self.threshold_min,
                 "diff_max": self.diff_max,
+                "diff_step": self.diff_step,
+                "warmup": self.warmup,
+                "final_diff_is_none": self.final_diff_is_none,
                 "diff_metric": self.diff_metric,
             },
             "optimizer": {"lr": self.lr},
@@ -277,7 +291,15 @@ class PPOConfig:
             "diff_threshold": algo.get("learning", {}).get(
                 "diff_threshold", cls.diff_threshold
             ),
+            "threshold_min": algo.get("learning", {}).get(
+                "threshold_min", cls.threshold_min
+            ),
             "diff_max": algo.get("learning", {}).get("diff_max", cls.diff_max),
+            "diff_step": algo.get("learning", {}).get("diff_step", cls.diff_step),
+            "warmup": algo.get("learning", {}).get("warmup", cls.warmup),
+            "final_diff_is_none": algo.get("learning", {}).get(
+                "final_diff_is_none", cls.final_diff_is_none
+            ),
             "diff_metric": algo.get("learning", {}).get("diff_metric", cls.diff_metric),
             # optimizer
             "lr": algo.get("optimizer", {}).get("lr", cls.lr),
@@ -366,7 +388,11 @@ class AlphaZeroConfig:
 
     # ---- curriculum
     diff_threshold: float = 0.85
+    threshold_min: float | None = None
     diff_max: int = 256
+    diff_step: int = 1
+    warmup: int = 0
+    final_diff_is_none: bool = False
     diff_metric: str = "mcts_100"
 
     # ---- evals & logging
@@ -402,8 +428,14 @@ class AlphaZeroConfig:
             raise ValueError("num_epochs must be > 0")
         if not (0.0 <= self.diff_threshold <= 1.0):
             raise ValueError("diff_threshold must be in [0, 1]")
+        if self.threshold_min is not None and not (0.0 <= self.threshold_min <= 1.0):
+            raise ValueError("threshold_min must be in [0, 1] when provided")
         if self.diff_max < 1:
             raise ValueError("diff_max must be >= 1")
+        if self.diff_step < 1:
+            raise ValueError("diff_step must be >= 1")
+        if self.warmup < 0:
+            raise ValueError("warmup must be >= 0")
         if self.diff_metric not in self.evals:
             raise ValueError(
                 f"diff_metric '{self.diff_metric}' not found in evals: {list(self.evals.keys())}"
@@ -444,7 +476,11 @@ class AlphaZeroConfig:
             "training": {"num_epochs": self.num_epochs},
             "learning": {
                 "diff_threshold": self.diff_threshold,
+                "threshold_min": self.threshold_min,
                 "diff_max": self.diff_max,
+                "diff_step": self.diff_step,
+                "warmup": self.warmup,
+                "final_diff_is_none": self.final_diff_is_none,
                 "diff_metric": self.diff_metric,
             },
             "optimizer": {"lr": self.lr},
@@ -491,7 +527,15 @@ class AlphaZeroConfig:
             "diff_threshold": algo.get("learning", {}).get(
                 "diff_threshold", cls.diff_threshold
             ),
+            "threshold_min": algo.get("learning", {}).get(
+                "threshold_min", cls.threshold_min
+            ),
             "diff_max": algo.get("learning", {}).get("diff_max", cls.diff_max),
+            "diff_step": algo.get("learning", {}).get("diff_step", cls.diff_step),
+            "warmup": algo.get("learning", {}).get("warmup", cls.warmup),
+            "final_diff_is_none": algo.get("learning", {}).get(
+                "final_diff_is_none", cls.final_diff_is_none
+            ),
             "diff_metric": algo.get("learning", {}).get("diff_metric", cls.diff_metric),
             # optimizer
             "lr": algo.get("optimizer", {}).get("lr", cls.lr),
@@ -557,6 +601,8 @@ class BasicPolicyConfig:
     common_layers: List[int] = field(default_factory=lambda: [256])
     policy_layers: List[int] = field(default_factory=list)
     value_layers: List[int] = field(default_factory=list)
+    action_mode: str = "categorical"
+    num_action_factors: int | None = None
 
     # constant used by to_json()/from_json()
     policy_cls: str = "twisterl.nn.BasicPolicy"
@@ -569,6 +615,12 @@ class BasicPolicyConfig:
         _validate_layers(self.common_layers, "common_layers")
         _validate_layers(self.policy_layers, "policy_layers")
         _validate_layers(self.value_layers, "value_layers")
+        if self.action_mode not in ("categorical", "factorized_bernoulli"):
+            raise ValueError(
+                "action_mode must be either 'categorical' or 'factorized_bernoulli'."
+            )
+        if self.num_action_factors is not None and self.num_action_factors < 1:
+            raise ValueError("num_action_factors must be >= 1 when provided.")
 
     def with_updates(self, **kwargs) -> "BasicPolicyConfig":
         """Return a new config with given kwargs applied."""
@@ -584,6 +636,8 @@ class BasicPolicyConfig:
             "common_layers": list(self.common_layers),
             "policy_layers": list(self.policy_layers),
             "value_layers": list(self.value_layers),
+            "action_mode": self.action_mode,
+            "num_action_factors": self.num_action_factors,
         }
 
     @classmethod
@@ -601,6 +655,12 @@ class BasicPolicyConfig:
             common_layers=list(pol.get("common_layers", cls().common_layers)),
             policy_layers=list(pol.get("policy_layers", cls().policy_layers)),
             value_layers=list(pol.get("value_layers", cls().value_layers)),
+            action_mode=str(pol.get("action_mode", cls.action_mode)),
+            num_action_factors=(
+                int(pol["num_action_factors"])
+                if pol.get("num_action_factors") is not None
+                else None
+            ),
             policy_cls=data.get("policy_cls", "twisterl.nn.BasicPolicy"),
         )
         obj.validate()
@@ -647,6 +707,8 @@ class Conv1dPolicyConfig:
     common_layers: List[int] = field(default_factory=lambda: [256])
     policy_layers: List[int] = field(default_factory=list)
     value_layers: List[int] = field(default_factory=list)
+    action_mode: str = "categorical"
+    num_action_factors: int | None = None
 
     # constant used by to_json()/from_json()
     policy_cls: str = "twisterl.nn.Conv1dPolicy"
@@ -659,6 +721,12 @@ class Conv1dPolicyConfig:
         _validate_layers(self.common_layers, "common_layers")
         _validate_layers(self.policy_layers, "policy_layers")
         _validate_layers(self.value_layers, "value_layers")
+        if self.action_mode not in ("categorical", "factorized_bernoulli"):
+            raise ValueError(
+                "action_mode must be either 'categorical' or 'factorized_bernoulli'."
+            )
+        if self.num_action_factors is not None and self.num_action_factors < 1:
+            raise ValueError("num_action_factors must be >= 1 when provided.")
 
     def with_updates(self, **kwargs) -> "Conv1dPolicyConfig":
         """Return a new config with given kwargs applied."""
@@ -675,6 +743,8 @@ class Conv1dPolicyConfig:
             "common_layers": list(self.common_layers),
             "policy_layers": list(self.policy_layers),
             "value_layers": list(self.value_layers),
+            "action_mode": self.action_mode,
+            "num_action_factors": self.num_action_factors,
         }
 
     @classmethod
@@ -693,6 +763,12 @@ class Conv1dPolicyConfig:
             common_layers=list(pol.get("common_layers", cls().common_layers)),
             policy_layers=list(pol.get("policy_layers", cls().policy_layers)),
             value_layers=list(pol.get("value_layers", cls().value_layers)),
+            action_mode=str(pol.get("action_mode", cls.action_mode)),
+            num_action_factors=(
+                int(pol["num_action_factors"])
+                if pol.get("num_action_factors") is not None
+                else None
+            ),
             policy_cls=data.get("policy_cls", "twisterl.nn.Conv1dPolicy"),
         )
         obj.validate()

@@ -12,9 +12,11 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 
 import torch
+import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 
 from twisterl.utils import dynamic_import, load_checkpoint
@@ -95,10 +97,45 @@ class RLSynthesis:
     def init_algorithm(self, model_path=None):
         # Import policy class and make policy
         obs_perms, act_perms = self.env.twists()
+        model_kwargs = dict(self.model_config.to_json())
+        action_space = getattr(self.env, "action_space", None)
+        action_mode = str(model_kwargs.get("action_mode", "categorical")).strip().lower()
+        num_action_factors = model_kwargs.get("num_action_factors", None)
+        should_auto_factorize = (
+            action_mode == "categorical"
+            and (num_action_factors is None or int(num_action_factors) <= 0)
+        )
+        if (
+            should_auto_factorize
+            and action_space is not None
+            and action_space.__class__.__name__ == "MultiBinary"
+        ):
+            n_bits = getattr(action_space, "n", None)
+            if n_bits is None:
+                shape = getattr(action_space, "shape", None)
+                n_bits = int(np.prod(shape)) if shape is not None else 0
+            else:
+                n_bits = int(np.prod(np.asarray(n_bits)))
+            if n_bits > 0:
+                model_kwargs["action_mode"] = "factorized_bernoulli"
+                model_kwargs["num_action_factors"] = n_bits
+
+        # Backward compatibility: tolerate older twisterl policy classes
+        # that do not yet expose action_mode / num_action_factors kwargs.
+        sig = inspect.signature(self.model_cls.__init__)
+        has_var_kwargs = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+        if not has_var_kwargs:
+            accepted = {name for name in sig.parameters if name != "self"}
+            for key in list(model_kwargs.keys()):
+                if key not in accepted:
+                    model_kwargs.pop(key, None)
+
         model = self.model_cls(
             self.env.obs_shape(),
             self.env.num_actions(),
-            **self.model_config.to_json(),
+            **model_kwargs,
             obs_perms=obs_perms,
             act_perms=act_perms,
         )
