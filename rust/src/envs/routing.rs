@@ -29,6 +29,7 @@ use crate::envs::metrics::MetricsWeights;
 type DistType = i32;
 
 const DIST_INF: DistType = DistType::MAX / 4;
+const SOURCE_ID_SYNTHETIC: usize = usize::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OpType {
@@ -58,12 +59,14 @@ impl OpType {
 
 #[derive(Clone, Debug)]
 struct TargetTemplate {
+    id: usize,
     op_type: OpType,
     qubits: (usize, usize),
 }
 
 #[derive(Clone, Debug)]
 struct DagOp {
+    id: usize,
     op_type: OpType,
     qubits: (usize, usize),
 }
@@ -71,6 +74,7 @@ struct DagOp {
 #[derive(Clone, Debug)]
 struct CircuitOp {
     id: usize,
+    source_id: usize,
     op_type: OpType,
     qubits: (usize, usize),
 }
@@ -199,7 +203,14 @@ impl CircuitDag {
         self.dag.remove_node(idx);
     }
 
-    fn append(&mut self, op_type: OpType, qubits: (usize, usize), autocancel: bool, virtual_swap: bool) {
+    fn append(
+        &mut self,
+        op_type: OpType,
+        qubits: (usize, usize),
+        autocancel: bool,
+        virtual_swap: bool,
+        source_id: usize,
+    ) {
         let (q1, q2) = qubits;
         if virtual_swap && op_type == OpType::Swap {
             if !self.front.contains_key(&q1) && !self.front.contains_key(&q2) {
@@ -220,23 +231,31 @@ impl CircuitDag {
                     }
                     (OpType::Swap, OpType::Cx) => {
                         self.remove_node(fidx);
-                        self.append(OpType::Cx, qubits, autocancel, virtual_swap);
+                        self.append(OpType::Cx, qubits, autocancel, virtual_swap, source_id);
                         self.append(
                             OpType::Cx,
                             (qubits.1, qubits.0),
                             autocancel,
                             virtual_swap,
+                            source_id,
                         );
                         return;
                     }
                     (OpType::Cx, OpType::Swap) => {
                         self.remove_node(fidx);
-                        self.append(OpType::Swap, qubits, autocancel, virtual_swap);
+                        self.append(
+                            OpType::Swap,
+                            qubits,
+                            autocancel,
+                            virtual_swap,
+                            SOURCE_ID_SYNTHETIC,
+                        );
                         self.append(
                             OpType::Cx,
                             (fop.qubits.1, fop.qubits.0),
                             autocancel,
                             virtual_swap,
+                            source_id,
                         );
                         return;
                     }
@@ -251,6 +270,7 @@ impl CircuitDag {
 
         let op = CircuitOp {
             id: self.next_id,
+            source_id,
             op_type,
             qubits,
         };
@@ -270,6 +290,13 @@ impl CircuitDag {
     }
 
     fn to_gate_list(&self) -> Vec<(OpType, (usize, usize))> {
+        self.to_gate_list_with_ids()
+            .iter()
+            .map(|(op_type, qubits, _source_id)| (*op_type, *qubits))
+            .collect()
+    }
+
+    fn to_gate_list_with_ids(&self) -> Vec<(OpType, (usize, usize), usize)> {
         let mut indegree = HashMap::<NodeIndex, usize>::new();
         let mut ready = Vec::<NodeIndex>::new();
         for node in self.dag.node_indices() {
@@ -281,12 +308,12 @@ impl CircuitDag {
             }
         }
 
-        let mut out = Vec::<(OpType, (usize, usize))>::new();
+        let mut out = Vec::<(OpType, (usize, usize), usize)>::new();
         while !ready.is_empty() {
             ready.sort_by_key(|idx| self.dag[*idx].id);
             let node = ready.remove(0);
             let op = &self.dag[node];
-            out.push((op.op_type, op.qubits));
+            out.push((op.op_type, op.qubits, op.source_id));
             for succ in self.dag.neighbors_directed(node, Outgoing) {
                 if let Some(d) = indegree.get_mut(&succ) {
                     *d = d.saturating_sub(1);
@@ -452,6 +479,7 @@ impl RoutingEnv {
             if let Some(pairs) = self.dist_pairs.get(&next_dist) {
                 let pair = pairs[rng.gen_range(0..pairs.len())];
                 out.push(TargetTemplate {
+                    id: out.len(),
                     op_type: self.routing_ops_type,
                     qubits: pair,
                 });
@@ -467,6 +495,7 @@ impl RoutingEnv {
     fn apply_layout_to_target(&self, ops: &[TargetTemplate], layout: &[usize]) -> Vec<TargetTemplate> {
         ops.iter()
             .map(|op| TargetTemplate {
+                id: op.id,
                 op_type: op.op_type,
                 qubits: (
                     layout.get(op.qubits.0).copied().unwrap_or(op.qubits.0),
@@ -510,6 +539,7 @@ impl RoutingEnv {
 
         for op in ops {
             let idx = dag.add_node(DagOp {
+                id: op.id,
                 op_type: op.op_type,
                 qubits: op.qubits,
             });
@@ -548,13 +578,14 @@ impl RoutingEnv {
             let l1 = self.locations[q1];
             let l2 = self.locations[q2];
 
-            if self.edge_exists(l1, l2) {
+            if q1 == q2 || self.edge_exists(l1, l2) {
                 solved += 1;
                 self.out_circuit.append(
                     op.op_type,
                     (l1, l2),
                     self.autocancel_ops,
                     false,
+                    op.id,
                 );
                 let successors: Vec<NodeIndex> =
                     self.in_dag.neighbors_directed(node, Outgoing).collect();
@@ -714,6 +745,7 @@ impl RoutingEnv {
             (l1, l2),
             true,
             self.layout_type != "trivial",
+            SOURCE_ID_SYNTHETIC,
         );
     }
 
@@ -836,7 +868,21 @@ impl RoutingEnv {
     pub fn set_target_ops(&mut self, ops: Vec<(String, (usize, usize))>) {
         let target = ops
             .into_iter()
-            .map(|(name, qubits)| TargetTemplate {
+            .enumerate()
+            .map(|(idx, (name, qubits))| TargetTemplate {
+                id: idx,
+                op_type: OpType::from_name(&name, self.routing_ops_type),
+                qubits,
+            })
+            .collect();
+        self.target = Some(target);
+    }
+
+    pub fn set_target_ops_with_ids(&mut self, ops: Vec<(String, (usize, usize), usize)>) {
+        let target = ops
+            .into_iter()
+            .map(|(name, qubits, op_id)| TargetTemplate {
+                id: op_id,
                 op_type: OpType::from_name(&name, self.routing_ops_type),
                 qubits,
             })
@@ -861,6 +907,14 @@ impl RoutingEnv {
         }
     }
 
+    pub fn set_layout_type(&mut self, layout_type: String) {
+        self.layout_type = layout_type.to_ascii_lowercase();
+    }
+
+    pub fn set_autocancel_ops(&mut self, autocancel_ops: bool) {
+        self.autocancel_ops = autocancel_ops;
+    }
+
     pub fn observe_float(&mut self) -> Vec<f32> {
         let (obs, active_swaps) = self.get_obs_and_active_swaps();
         self.active_swaps.set(active_swaps);
@@ -880,6 +934,24 @@ impl RoutingEnv {
             .to_gate_list()
             .iter()
             .map(|(op_type, qubits)| (op_type.as_name().to_string(), *qubits))
+            .collect()
+    }
+
+    pub fn get_circuit_with_ids(&self) -> Vec<(String, (usize, usize), isize)> {
+        self.out_circuit
+            .to_gate_list_with_ids()
+            .iter()
+            .map(|(op_type, qubits, source_id)| {
+                (
+                    op_type.as_name().to_string(),
+                    *qubits,
+                    if *source_id == SOURCE_ID_SYNTHETIC {
+                        -1
+                    } else {
+                        *source_id as isize
+                    },
+                )
+            })
             .collect()
     }
 }
@@ -1060,6 +1132,15 @@ impl PyRoutingEnv {
         }
     }
 
+    pub fn set_target_with_ids(
+        mut slf: PyRefMut<'_, Self>,
+        ops: Vec<(String, (usize, usize), usize)>,
+    ) {
+        if let Some(env) = slf.as_mut().env.as_any_mut().downcast_mut::<RoutingEnv>() {
+            env.set_target_ops_with_ids(ops);
+        }
+    }
+
     pub fn clear_target(mut slf: PyRefMut<'_, Self>) {
         if let Some(env) = slf.as_mut().env.as_any_mut().downcast_mut::<RoutingEnv>() {
             env.clear_target_ops();
@@ -1075,6 +1156,18 @@ impl PyRoutingEnv {
     pub fn set_sabre_layout(mut slf: PyRefMut<'_, Self>, layout: Vec<usize>) {
         if let Some(env) = slf.as_mut().env.as_any_mut().downcast_mut::<RoutingEnv>() {
             env.set_sabre_layout(layout);
+        }
+    }
+
+    pub fn set_layout_type(mut slf: PyRefMut<'_, Self>, layout_type: String) {
+        if let Some(env) = slf.as_mut().env.as_any_mut().downcast_mut::<RoutingEnv>() {
+            env.set_layout_type(layout_type);
+        }
+    }
+
+    pub fn set_autocancel_ops(mut slf: PyRefMut<'_, Self>, autocancel_ops: bool) {
+        if let Some(env) = slf.as_mut().env.as_any_mut().downcast_mut::<RoutingEnv>() {
+            env.set_autocancel_ops(autocancel_ops);
         }
     }
 
@@ -1105,6 +1198,14 @@ impl PyRoutingEnv {
     pub fn get_circuit(slf: PyRef<'_, Self>) -> Vec<(String, (usize, usize))> {
         if let Some(env) = slf.as_ref().env.as_any().downcast_ref::<RoutingEnv>() {
             env.get_circuit()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn get_circuit_with_ids(slf: PyRef<'_, Self>) -> Vec<(String, (usize, usize), isize)> {
+        if let Some(env) = slf.as_ref().env.as_any().downcast_ref::<RoutingEnv>() {
+            env.get_circuit_with_ids()
         } else {
             Vec::new()
         }

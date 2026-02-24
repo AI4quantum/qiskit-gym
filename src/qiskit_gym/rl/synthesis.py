@@ -160,7 +160,14 @@ class RLSynthesis:
             state, deterministic, num_searches, num_mcts_searches, C, max_expand_depth
         )
         if actions is not None:
-            return self.env.build_circuit_from_solution(actions, input)
+            output = self.env.build_circuit_from_solution(actions, input)
+            if hasattr(self.env, "get_last_layout"):
+                qubits, locations = self.env.get_last_layout()
+                self.last_routing_layout = {
+                    "qubits": qubits,
+                    "locations": locations,
+                }
+            return output
 
     def learn(self, initial_difficulty=1, num_iterations=int(1e10), tb_path=None):
         if tb_path is not None:

@@ -23,6 +23,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.exceptions import QiskitError
+from .routing import RoutingEnv
 
 
 ONE_Q_GATES = ["H", "S", "Sdg", "SX", "SXdg"]
@@ -518,6 +519,148 @@ class PauliGym(PauliNetworkEnv, BaseSynthesisEnv):
         return self._reconstruct_circuit_from_solution(full_solution, input)
 
 
+# ------------- Routing -------------
+
+class RoutingGym(RoutingEnv, BaseSynthesisEnv):
+    cls_name = "RoutingEnv"
+    allowed_gates = ["CX", "CZ", "SWAP"]
+
+    @classmethod
+    def from_coupling_map(
+        cls,
+        coupling_map: CouplingMap | List[Tuple[int, int]],
+        **kwargs,
+    ):
+        return cls.from_json(
+            RoutingEnv.from_coupling_map(coupling_map, **kwargs).to_json()
+        )
+
+    def _set_inference_difficulty(self, n_targets: int) -> None:
+        if n_targets <= 0:
+            return
+        current = int(getattr(self, "difficulty", self.config.get("difficulty", 1)))
+        # Inference should not truncate early by training-time episode length.
+        suggested = int(n_targets) * max(1, int(self.config["num_qubits"]))
+        if suggested > current:
+            self.difficulty = suggested
+
+    def get_state(self, input):
+        # Routing uses target-setting rather than encoded state vectors.
+        # For inference we keep the logical frame fixed and allow explicit
+        # layout overrides from the RoutingInference wrapper.
+        self.config["layout_type"] = "trivial"
+        if hasattr(self, "set_layout_type"):
+            self.set_layout_type("trivial")
+        if hasattr(self, "set_autocancel_ops"):
+            self.set_autocancel_ops(False)
+        if hasattr(self, "_auto_sabre_layout"):
+            self._auto_sabre_layout = False
+
+        layout_override = getattr(self, "_routing_layout_override", None)
+        if layout_override is None:
+            layout_override = list(range(self.config["num_qubits"]))
+        else:
+            layout_override = [int(q) for q in layout_override]
+
+        if hasattr(self, "set_fixed_layout"):
+            self.set_fixed_layout(layout_override)
+            if hasattr(self, "set_sabre_layout"):
+                self.set_sabre_layout(layout_override)
+
+        self._routing_original_ops_by_id = {}
+        self._routing_input_shape = (self.config["num_qubits"], 0)
+        if isinstance(input, QuantumCircuit):
+            target_ops = []
+            original_ops_by_id = {}
+            op_id = 0
+            for inst, qargs, cargs in input.data:
+                if len(qargs) not in (1, 2):
+                    continue
+                q1 = input.find_bit(qargs[0]).index
+                q2 = (
+                    input.find_bit(qargs[1]).index
+                    if len(qargs) == 2
+                    else q1
+                )
+                name = inst.name.lower()
+                if name not in ("cx", "cz", "swap"):
+                    name = self.config["routing_ops_type"]
+                target_ops.append((name, (int(q1), int(q2)), int(op_id)))
+                cidx = tuple(input.find_bit(c).index for c in cargs)
+                original_ops_by_id[int(op_id)] = (inst.copy(), cidx)
+                op_id += 1
+
+            # Route only 2q pairs in the RL env, but keep original 2q ops with
+            # stable ids so we can reconstruct the routed output exactly.
+            self._routing_original_ops_by_id = original_ops_by_id
+            self._routing_input_shape = (input.num_qubits, input.num_clbits)
+            self.set_target(target_ops)
+            self._set_inference_difficulty(len(target_ops))
+        else:
+            self.set_target(input)
+            try:
+                n_targets = len(input)
+            except Exception:
+                n_targets = 0
+            self._set_inference_difficulty(int(n_targets))
+        self.reset()
+        return []
+
+    def build_circuit_from_solution(self, actions: List[int], input) -> QuantumCircuit | None:
+        # Re-run actions on the same target and export the routed two-qubit circuit.
+        _ = self.get_state(input)
+        self.reset()
+        for action in actions:
+            if self.is_final():
+                break
+            self.step(int(action))
+
+        if not bool(self.is_final()):
+            return None
+
+        num_qubits, num_clbits = getattr(
+            self, "_routing_input_shape", (self.config["num_qubits"], 0)
+        )
+        circuit = QuantumCircuit(num_qubits, num_clbits)
+        original_ops_by_id = dict(getattr(self, "_routing_original_ops_by_id", {}))
+        fallback_ops = [original_ops_by_id[k] for k in sorted(original_ops_by_id.keys())]
+        fallback_cursor = 0
+
+        for gate_name, (q1, q2), source_id in self.get_circuit_with_ids():
+            name = gate_name.lower()
+            if name == "swap":
+                circuit.swap(int(q1), int(q2))
+                continue
+
+            selected = original_ops_by_id.get(int(source_id))
+            if selected is None and fallback_cursor < len(fallback_ops):
+                selected = fallback_ops[fallback_cursor]
+                fallback_cursor += 1
+
+            if selected is not None:
+                op, cidx = selected
+                cargs = [circuit.clbits[i] for i in cidx] if cidx else []
+                if int(op.num_qubits) == 1:
+                    circuit.append(op, [int(q1)], cargs)
+                else:
+                    circuit.append(op, [int(q1), int(q2)], cargs)
+            elif name == "cx":
+                circuit.cx(int(q1), int(q2))
+            elif name == "cz":
+                circuit.cz(int(q1), int(q2))
+
+        # Expose routing layout metadata (compatible with old routing inference needs).
+        self._last_qubits = list(self.get_qubits())
+        self._last_locations = list(self.get_locations())
+        return circuit
+
+    def get_last_layout(self) -> tuple[List[int], List[int]]:
+        return (
+            list(getattr(self, "_last_qubits", [])),
+            list(getattr(self, "_last_locations", [])),
+        )
+
+
 # ---------------------------------------
 
 SYNTH_ENVS = {
@@ -525,4 +668,5 @@ SYNTH_ENVS = {
     "LinearFunctionEnv": LinearFunctionGym,
     "PermutationEnv": PermutationGym,
     "PauliNetworkEnv": PauliGym,
+    "RoutingEnv": RoutingGym,
 }

@@ -19,3 +19,4 @@ from .configs import (
     ALGORITHMS,
 )
 from .synthesis import RLSynthesis
+from .routing import RoutingInference

@@ -10,5 +10,13 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from .synthesis import CliffordGym, LinearFunctionGym, PermutationGym, PauliGym
-from .routing import RoutingGym
+from .synthesis import (
+    CliffordGym,
+    LinearFunctionGym,
+    PermutationGym,
+    PauliGym,
+    RoutingGym,
+)
+
+# Backward- and forward-compatible naming for routing env.
+RoutingEnv = RoutingGym

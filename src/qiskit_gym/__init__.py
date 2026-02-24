@@ -9,3 +9,12 @@
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
+
+try:
+    import qiskit_gym_rs as _qiskit_gym_rs
+except ImportError:
+    from . import qiskit_gym_rs as _qiskit_gym_rs
+
+qiskit_gym_rs = _qiskit_gym_rs
+
+__all__ = ["qiskit_gym_rs"]

@@ -1,5 +1,5 @@
 {
-  "env_cls": "qiskit_gym.envs.RoutingGym",
+  "env_cls": "qiskit_gym.envs.RoutingEnv",
   "env": {
     "num_qubits": 127,
     "coupling_map": {

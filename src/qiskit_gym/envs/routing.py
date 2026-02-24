@@ -64,7 +64,7 @@ def _generate_pairs(difficulty: int, dist_pairs, all_dists) -> list[tuple[int, i
     return out
 
 
-class RoutingGym(gym.Env):
+class RoutingEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 4}
 
     def __init__(
@@ -180,6 +180,13 @@ class RoutingGym(gym.Env):
         # Keep backward compatibility with older configs that serialized dists,
         # but always compute distances from the coupling map at init.
         normalized.pop("dists", None)
+        coupling_map = normalized.get("coupling_map")
+        if isinstance(coupling_map, dict):
+            # Support tuple-list serializer used by legacy JSON configs.
+            if coupling_map.get("__tuple_list__", False):
+                normalized["coupling_map"] = coupling_map.get("list", [])
+            elif "list" in coupling_map and isinstance(coupling_map["list"], list):
+                normalized["coupling_map"] = coupling_map["list"]
         return cls(**normalized)
 
     def _get_sabre_layout_pass(self) -> SabreLayout:
@@ -242,6 +249,28 @@ class RoutingGym(gym.Env):
 
     def set_target(self, target):
         if isinstance(target, list):
+            if _is_named_qubit_pair_id_list(target):
+                ops_with_ids = [
+                    (str(name), (int(pair[0]), int(pair[1])), int(op_id))
+                    for name, pair, op_id in target
+                ]
+                self.set_target_with_ids(ops_with_ids)
+                self._maybe_set_sabre_layout(
+                    self._qc_from_pairs([pair for _, pair, _ in ops_with_ids])
+                )
+                return
+
+            if _is_named_qubit_pair_list(target):
+                ops = [
+                    (str(name), (int(pair[0]), int(pair[1])))
+                    for name, pair in target
+                ]
+                self._raw_env.set_target(ops)
+                self._maybe_set_sabre_layout(
+                    self._qc_from_pairs([pair for _, pair in ops])
+                )
+                return
+
             if _is_qubit_pair_list(target):
                 pairs = [tuple(pair) for pair in target]
             else:
@@ -278,6 +307,40 @@ class RoutingGym(gym.Env):
         self._raw_env.set_sabre_layout(layout)
         self._raw_env.set_fixed_layout(layout)
 
+    def set_layout_type(self, layout_type: str):
+        value = str(layout_type).strip().lower()
+        self.config["layout_type"] = value
+        if hasattr(self._raw_env, "set_layout_type"):
+            self._raw_env.set_layout_type(value)
+
+    def set_autocancel_ops(self, autocancel_ops: bool):
+        value = bool(autocancel_ops)
+        self.config["autocancel_ops"] = value
+        if hasattr(self._raw_env, "set_autocancel_ops"):
+            self._raw_env.set_autocancel_ops(value)
+
+    def set_target_with_ids(self, ops: List[Tuple[str, Tuple[int, int], int]]):
+        normalized = [
+            (str(name), (int(qubits[0]), int(qubits[1])), int(op_id))
+            for name, qubits, op_id in ops
+        ]
+        if hasattr(self._raw_env, "set_target_with_ids"):
+            self._raw_env.set_target_with_ids(normalized)
+        else:
+            self._raw_env.set_target([(name, qubits) for name, qubits, _ in normalized])
+
+    def get_circuit_with_ids(self) -> List[Tuple[str, Tuple[int, int], int]]:
+        if hasattr(self._raw_env, "get_circuit_with_ids"):
+            return [
+                (str(name), (int(q1), int(q2)), int(op_id))
+                for name, (q1, q2), op_id in self._raw_env.get_circuit_with_ids()
+            ]
+        # Fallback: no source IDs available.
+        return [
+            (str(name), (int(q1), int(q2)), -1)
+            for name, (q1, q2) in self._raw_env.get_circuit()
+        ]
+
     def render(self, mode="human"):
         if hasattr(self._raw_env, "render"):
             return self._raw_env.render(mode=mode)
@@ -313,6 +376,40 @@ def _is_qubit_pair_list(target: Sequence) -> bool:
     return True
 
 
+def _is_named_qubit_pair_list(target: Sequence) -> bool:
+    if not isinstance(target, Sequence) or len(target) == 0:
+        return False
+    for item in target:
+        if not isinstance(item, Sequence) or len(item) != 2:
+            return False
+        name, pair = item
+        if not isinstance(name, str):
+            return False
+        if not isinstance(pair, Sequence) or len(pair) != 2:
+            return False
+        if not all(isinstance(q, (int, np.integer)) for q in pair):
+            return False
+    return True
+
+
+def _is_named_qubit_pair_id_list(target: Sequence) -> bool:
+    if not isinstance(target, Sequence) or len(target) == 0:
+        return False
+    for item in target:
+        if not isinstance(item, Sequence) or len(item) != 3:
+            return False
+        name, pair, op_id = item
+        if not isinstance(name, str):
+            return False
+        if not isinstance(pair, Sequence) or len(pair) != 2:
+            return False
+        if not all(isinstance(q, (int, np.integer)) for q in pair):
+            return False
+        if not isinstance(op_id, (int, np.integer)):
+            return False
+    return True
+
+
 def _normalize_edges(edges: Iterable[Sequence[int]]) -> list[tuple[int, int]]:
     out = []
     for edge in edges:
@@ -320,3 +417,7 @@ def _normalize_edges(edges: Iterable[Sequence[int]]) -> list[tuple[int, int]]:
             raise ValueError(f"Invalid coupling-map edge {edge}; each edge must have 2 entries")
         out.append((int(edge[0]), int(edge[1])))
     return out
+
+
+# Backward compatibility alias.
+RoutingGym = RoutingEnv
