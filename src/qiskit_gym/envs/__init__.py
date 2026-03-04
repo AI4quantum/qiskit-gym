@@ -11,3 +11,4 @@
 # that they have been altered from the originals.
 
 from .synthesis import CliffordGym, LinearFunctionGym, PermutationGym
+from .routing import RoutingGym
