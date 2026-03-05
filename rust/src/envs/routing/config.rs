@@ -24,8 +24,10 @@ pub struct RoutingConfig {
     pub coupling_map: Vec<(usize, usize)>,
     pub dists: Vec<Vec<DistType>>,
     pub difficulty: usize,
+    pub max_difficulty: usize,
     pub depth_slope: usize,
     pub max_depth: usize,
+    pub layout_exponent: f32,
 }
 
 impl RoutingConfig {

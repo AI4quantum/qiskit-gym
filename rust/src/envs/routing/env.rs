@@ -63,9 +63,11 @@ impl RoutingEnv {
         num_active_swaps: usize,
         horizon: usize,
         difficulty: usize,
+        max_difficulty: usize,
         depth_slope: usize,
         max_depth: usize,
         obs_bins: usize,
+        layout_exponent: f32,
         metrics_weights: MetricsWeights,
         track_solution: bool,
     ) -> Self {
@@ -82,8 +84,10 @@ impl RoutingEnv {
             coupling_map,
             dists,
             difficulty,
+            max_difficulty,
             depth_slope,
             max_depth,
+            layout_exponent,
         };
 
         let in_dag = TwoQubitDAG::new(&config.coupling_map, num_qubits);
@@ -209,6 +213,28 @@ impl Env for RoutingEnv {
         self.depth = (self.config.depth_slope * self.config.difficulty).min(self.config.max_depth);
         self.reset_internals();
 
+        // Progressive random layout: power-curve partial Fisher-Yates shuffle
+        {
+            use rand::seq::SliceRandom;
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            let n = self.config.num_qubits;
+            if self.config.difficulty >= self.config.max_difficulty {
+                self.locations.shuffle(&mut rng);
+            } else if self.config.max_difficulty > 0 && self.config.difficulty > 0 {
+                let t = self.config.difficulty as f32 / self.config.max_difficulty as f32;
+                let fraction = t.powf(self.config.layout_exponent);
+                let num_swaps = (fraction * n as f32) as usize;
+                for i in (n - num_swaps)..n {
+                    let j = rng.gen_range(0..=i);
+                    self.locations.swap(i, j);
+                }
+            }
+            for (q, &loc) in self.locations.iter().enumerate() {
+                self.qubits[loc] = q;
+            }
+        }
+
         // Resolve initially executable operations
         self.in_dag.execute_front(&self.locations, &self.config.dists);
         self.success = self.in_dag.len() == 0;
@@ -240,9 +266,9 @@ impl Env for RoutingEnv {
             self.locations[q1] = l1;
             self.locations[q2] = l2;
 
-            // Track solution
+            // Track solution (record coupling-map edge index, not action index)
             if self.track_solution {
-                self.solution.push(action);
+                self.solution.push(swap_idx);
             }
         }
 
@@ -311,9 +337,11 @@ impl PyRoutingEnv {
         num_active_swaps = 16,
         horizon = 8,
         difficulty = 1,
+        max_difficulty = 256,
         depth_slope = 2,
         max_depth = 128,
         obs_bins = None,
+        layout_exponent = None,
         metrics_weights = None,
         track_solution = None,
     ))]
@@ -323,9 +351,11 @@ impl PyRoutingEnv {
         num_active_swaps: usize,
         horizon: usize,
         difficulty: usize,
+        max_difficulty: usize,
         depth_slope: usize,
         max_depth: usize,
         obs_bins: Option<usize>,
+        layout_exponent: Option<f32>,
         metrics_weights: Option<HashMap<String, f32>>,
         track_solution: Option<bool>,
     ) -> (Self, PyBaseEnv) {
@@ -336,9 +366,11 @@ impl PyRoutingEnv {
             num_active_swaps,
             horizon,
             difficulty,
+            max_difficulty,
             depth_slope,
             max_depth,
             obs_bins.unwrap_or(7),
+            layout_exponent.unwrap_or(1.0),
             weights,
             track_solution.unwrap_or(true),
         );
@@ -402,7 +434,7 @@ mod tests {
     fn test_routing_env_basic() {
         let cmap = line_coupling(5);
         let weights = MetricsWeights::default();
-        let mut env = RoutingEnv::new(5, cmap, 8, 4, 2, 2, 64, 5, weights, false);
+        let mut env = RoutingEnv::new(5, cmap, 8, 4, 2, 256, 2, 64, 5, 1.0, weights, false);
 
         env.reset();
 
@@ -423,7 +455,7 @@ mod tests {
         // Difficulty 0 should produce an immediately solved env
         let cmap = line_coupling(3);
         let weights = MetricsWeights::default();
-        let mut env = RoutingEnv::new(3, cmap, 4, 4, 0, 2, 64, 5, weights, false);
+        let mut env = RoutingEnv::new(3, cmap, 4, 4, 0, 256, 2, 64, 5, 1.0, weights, false);
 
         env.reset();
         assert!(env.success());
@@ -435,7 +467,7 @@ mod tests {
     fn test_routing_env_step() {
         let cmap = line_coupling(5);
         let weights = MetricsWeights::default();
-        let mut env = RoutingEnv::new(5, cmap, 8, 4, 5, 4, 128, 5, weights, true);
+        let mut env = RoutingEnv::new(5, cmap, 8, 4, 5, 256, 4, 128, 5, 1.0, weights, true);
 
         env.reset();
         if !env.is_final() {
@@ -454,7 +486,7 @@ mod tests {
     fn test_set_state() {
         let cmap = line_coupling(5);
         let weights = MetricsWeights::default();
-        let mut env = RoutingEnv::new(5, cmap, 8, 4, 1, 2, 64, 5, weights, false);
+        let mut env = RoutingEnv::new(5, cmap, 8, 4, 1, 256, 2, 64, 5, 1.0, weights, false);
 
         // Set state with a single gate between qubits 0 and 4 (distance 4)
         env.set_state(vec![0, 4]);
