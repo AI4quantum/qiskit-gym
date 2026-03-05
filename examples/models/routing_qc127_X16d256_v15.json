@@ -39,18 +39,18 @@
     "max_depth": 64,
     "obs_bins": 7,
     "metrics_weights": {
-      "n_cnots": 0.01,
-      "n_layers_cnots": 0.005,
-      "n_layers": 0.0002,
-      "n_gates": 0.0
+      "n_cnots": 0.000001,
+      "n_layers_cnots": 0.000001,
+      "n_layers": 0.0000001,
+      "n_gates": 0.0000001
     },
-    "layout_exponent": 1.5,
+    "layout_exponent": 10.0,
     "track_solution": true
   },
   "policy_cls": "twisterl.nn.Conv1dPolicy",
   "policy": {
     "conv_dim": 1,
-    "embedding_size": 256,
+    "embedding_size": 1024,
     "common_layers": [512, 256],
     "policy_layers": [],
     "value_layers": []
