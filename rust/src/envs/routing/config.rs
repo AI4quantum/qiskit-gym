@@ -14,6 +14,28 @@ that they have been altered from the originals.
 /// Distance type for shortest-path distances on the coupling map.
 pub type DistType = i32;
 
+/// Layout mode for the initial qubit mapping at each reset.
+#[derive(Clone, PartialEq)]
+pub enum LayoutMode {
+    /// Always identity layout.
+    Sequential,
+    /// Always fully random layout.
+    Random,
+    /// Progressive: randomness scales with difficulty via power curve.
+    Progressive,
+}
+
+impl LayoutMode {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "sequential" => LayoutMode::Sequential,
+            "random" => LayoutMode::Random,
+            "progressive" => LayoutMode::Progressive,
+            _ => panic!("Unknown layout_mode: '{}'. Expected 'sequential', 'random', or 'progressive'", s),
+        }
+    }
+}
+
 /// Configuration for the routing environment.
 #[derive(Clone)]
 pub struct RoutingConfig {
@@ -27,6 +49,7 @@ pub struct RoutingConfig {
     pub max_difficulty: usize,
     pub depth_slope: usize,
     pub max_depth: usize,
+    pub layout_mode: LayoutMode,
     pub layout_exponent: f32,
 }
 

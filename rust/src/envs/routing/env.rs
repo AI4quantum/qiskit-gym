@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use twisterl::python_interface::env::PyBaseEnv;
 use twisterl::rl::env::Env;
 
-use super::config::{DistType, RoutingConfig};
+use super::config::{DistType, LayoutMode, RoutingConfig};
 use super::dag::TwoQubitDAG;
 use super::generator::RoutingGenerator;
 use crate::envs::metrics::{MetricsCounts, MetricsTracker, MetricsWeights};
@@ -67,6 +67,7 @@ impl RoutingEnv {
         depth_slope: usize,
         max_depth: usize,
         obs_bins: usize,
+        layout_mode: LayoutMode,
         layout_exponent: f32,
         metrics_weights: MetricsWeights,
         track_solution: bool,
@@ -87,6 +88,7 @@ impl RoutingEnv {
             max_difficulty,
             depth_slope,
             max_depth,
+            layout_mode,
             layout_exponent,
         };
 
@@ -213,21 +215,29 @@ impl Env for RoutingEnv {
         self.depth = (self.config.depth_slope * self.config.difficulty).min(self.config.max_depth);
         self.reset_internals();
 
-        // Progressive random layout: power-curve partial Fisher-Yates shuffle
+        // Apply layout mode
         {
             use rand::seq::SliceRandom;
             use rand::Rng;
             let mut rng = rand::thread_rng();
             let n = self.config.num_qubits;
-            if self.config.difficulty >= self.config.max_difficulty {
-                self.locations.shuffle(&mut rng);
-            } else if self.config.max_difficulty > 0 && self.config.difficulty > 0 {
-                let t = self.config.difficulty as f32 / self.config.max_difficulty as f32;
-                let fraction = t.powf(self.config.layout_exponent);
-                let num_swaps = (fraction * n as f32) as usize;
-                for i in (n - num_swaps)..n {
-                    let j = rng.gen_range(0..=i);
-                    self.locations.swap(i, j);
+            match &self.config.layout_mode {
+                LayoutMode::Sequential => { /* identity — nothing to do */ }
+                LayoutMode::Random => {
+                    self.locations.shuffle(&mut rng);
+                }
+                LayoutMode::Progressive => {
+                    if self.config.difficulty >= self.config.max_difficulty {
+                        self.locations.shuffle(&mut rng);
+                    } else if self.config.max_difficulty > 0 && self.config.difficulty > 0 {
+                        let t = self.config.difficulty as f32 / self.config.max_difficulty as f32;
+                        let fraction = t.powf(self.config.layout_exponent);
+                        let num_swaps = (fraction * n as f32) as usize;
+                        for i in (n - num_swaps)..n {
+                            let j = rng.gen_range(0..=i);
+                            self.locations.swap(i, j);
+                        }
+                    }
                 }
             }
             for (q, &loc) in self.locations.iter().enumerate() {
@@ -341,6 +351,7 @@ impl PyRoutingEnv {
         depth_slope = 2,
         max_depth = 128,
         obs_bins = None,
+        layout_mode = None,
         layout_exponent = None,
         metrics_weights = None,
         track_solution = None,
@@ -355,11 +366,13 @@ impl PyRoutingEnv {
         depth_slope: usize,
         max_depth: usize,
         obs_bins: Option<usize>,
+        layout_mode: Option<String>,
         layout_exponent: Option<f32>,
         metrics_weights: Option<HashMap<String, f32>>,
         track_solution: Option<bool>,
     ) -> (Self, PyBaseEnv) {
         let weights = MetricsWeights::from_hashmap(metrics_weights);
+        let mode = LayoutMode::from_str(&layout_mode.unwrap_or_else(|| "sequential".to_string()));
         let env = RoutingEnv::new(
             num_qubits,
             coupling_map,
@@ -370,6 +383,7 @@ impl PyRoutingEnv {
             depth_slope,
             max_depth,
             obs_bins.unwrap_or(7),
+            mode,
             layout_exponent.unwrap_or(1.0),
             weights,
             track_solution.unwrap_or(true),
@@ -434,7 +448,7 @@ mod tests {
     fn test_routing_env_basic() {
         let cmap = line_coupling(5);
         let weights = MetricsWeights::default();
-        let mut env = RoutingEnv::new(5, cmap, 8, 4, 2, 256, 2, 64, 5, 1.0, weights, false);
+        let mut env = RoutingEnv::new(5, cmap, 8, 4, 2, 256, 2, 64, 5, LayoutMode::Sequential, 1.0, weights, false);
 
         env.reset();
 
@@ -455,7 +469,7 @@ mod tests {
         // Difficulty 0 should produce an immediately solved env
         let cmap = line_coupling(3);
         let weights = MetricsWeights::default();
-        let mut env = RoutingEnv::new(3, cmap, 4, 4, 0, 256, 2, 64, 5, 1.0, weights, false);
+        let mut env = RoutingEnv::new(3, cmap, 4, 4, 0, 256, 2, 64, 5, LayoutMode::Sequential, 1.0, weights, false);
 
         env.reset();
         assert!(env.success());
@@ -467,7 +481,7 @@ mod tests {
     fn test_routing_env_step() {
         let cmap = line_coupling(5);
         let weights = MetricsWeights::default();
-        let mut env = RoutingEnv::new(5, cmap, 8, 4, 5, 256, 4, 128, 5, 1.0, weights, true);
+        let mut env = RoutingEnv::new(5, cmap, 8, 4, 5, 256, 4, 128, 5, LayoutMode::Sequential, 1.0, weights, true);
 
         env.reset();
         if !env.is_final() {
@@ -486,7 +500,7 @@ mod tests {
     fn test_set_state() {
         let cmap = line_coupling(5);
         let weights = MetricsWeights::default();
-        let mut env = RoutingEnv::new(5, cmap, 8, 4, 1, 256, 2, 64, 5, 1.0, weights, false);
+        let mut env = RoutingEnv::new(5, cmap, 8, 4, 1, 256, 2, 64, 5, LayoutMode::Sequential, 1.0, weights, false);
 
         // Set state with a single gate between qubits 0 and 4 (distance 4)
         env.set_state(vec![0, 4]);
