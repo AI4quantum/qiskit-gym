@@ -512,9 +512,7 @@ checksum = "b1dd07eb858a2067e2f3c7155d54e929265c264e6f37efe3ee7a8d1b5a1dd0ba"
 
 [[package]]
 name = "twisterl"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8ab470e347cfa5e2b0df26462b6792ac9f90cc378ca7a168826fb41bc81ac0f"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "dyn-clone",
