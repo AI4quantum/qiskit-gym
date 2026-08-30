@@ -14,11 +14,15 @@ that they have been altered from the originals.
 use pyo3::prelude::*;
 
 use rand::distributions::{Distribution, Uniform};
+use rand::Rng;
 
 use twisterl::rl::env::Env;
-use twisterl::python_interface::env::{PyBaseEnv, get_env_ref, get_env_mut};
+use twisterl::python_interface::env::PyBaseEnv;
 
 use crate::envs::common::Gate;
+use crate::envs::metrics::{MetricsCounts, MetricsTracker, MetricsWeights};
+use crate::envs::symmetry::compute_twists_clifford;
+use std::collections::HashMap;
 
 
 #[derive(Clone)]
@@ -139,6 +143,35 @@ impl CFState {
         }
         true
     }
+
+    fn inverse(&self) -> Self {
+        let dim = self.dim();
+        let mut mat = self.clone();
+        let mut inv = CFState::new(self.n);
+
+        for col in 0..dim {
+            if !mat.get(col, col) {
+                let pivot = ((col + 1)..dim).find(|&row| mat.get(row, col));
+                let pivot = pivot.expect("CFState is singular; cannot invert");
+                mat.swap_rows(col, pivot);
+                inv.swap_rows(col, pivot);
+            }
+
+            for row in 0..dim {
+                if row != col && mat.get(row, col) {
+                    mat.row_xor(row, col);
+                    inv.row_xor(row, col);
+                }
+            }
+        }
+
+        debug_assert!(mat.solved(), "CFState inverse computation failed");
+        inv
+    }
+
+    fn invert(&mut self) {
+        *self = self.inverse();
+    }
 }
 
 // -------- Env: Clifford synthesis over the symplectic tableau (phase ignored) --------
@@ -153,6 +186,17 @@ pub struct Clifford {
     pub gateset: Vec<Gate>,
     pub depth_slope: usize,
     pub max_depth: usize,
+    pub obs_perms: Vec<Vec<usize>>,
+    pub act_perms: Vec<Vec<usize>>,
+    metrics: MetricsTracker,
+    metrics_values: MetricsCounts,
+    metrics_weights: MetricsWeights,
+    reward_value: f32,
+    add_inverts: bool,
+    track_solution: bool,
+    solution: Vec<usize>,
+    solution_inv: Vec<usize>,
+    inverted: bool,
 }
 
 impl Clifford {
@@ -162,12 +206,80 @@ impl Clifford {
         gateset: Vec<Gate>,
         depth_slope: usize,
         max_depth: usize,
+        metrics_weights: MetricsWeights,
+        add_inverts: bool,
+        add_perms: bool,
+        track_solution: bool,
     ) -> Self {
         let cf = CFState::new(num_qubits);
         let success = cf.solved();
-        Clifford { cf, depth: 1, success, difficulty, gateset, depth_slope, max_depth }
+
+        // Only compute symmetries if enabled
+        let (obs_perms, act_perms) = if add_perms {
+            compute_twists_clifford(num_qubits, &gateset)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        let metrics = MetricsTracker::new(num_qubits);
+        let metrics_values = metrics.snapshot();
+        Clifford {
+            cf,
+            depth: 1,
+            success,
+            difficulty,
+            gateset,
+            depth_slope,
+            max_depth,
+            obs_perms,
+            act_perms,
+            metrics,
+            metrics_values,
+            metrics_weights,
+            reward_value: if success { 1.0 } else { 0.0 },
+            add_inverts,
+            track_solution,
+            solution: Vec::new(),
+            solution_inv: Vec::new(),
+            inverted: false,
+        }
     }
     pub fn solved(&self) -> bool { self.cf.solved() }
+
+    fn apply_gate_to_state(&mut self, gate: &Gate) {
+        match gate {
+            Gate::H(q) => self.cf.h(*q),
+            Gate::S(q) => self.cf.s(*q),
+            Gate::Sdg(q) => self.cf.sdg(*q), // identical to S modulo global phase (ignored)
+            Gate::SX(q) => self.cf.sx(*q),
+            Gate::SXdg(q) => self.cf.sxdg(*q), // identical to SX modulo global phase (ignored)
+            Gate::CX(c, t) => self.cf.cx(*c, *t),
+            Gate::CZ(a, b) => self.cf.cz(*a, *b),
+            Gate::SWAP(a, b) => self.cf.swap(*a, *b),
+        }
+    }
+
+    fn maybe_random_invert(&mut self) {
+        if !self.add_inverts {
+            return;
+        }
+        if rand::thread_rng().gen_bool(0.5) {
+            self.cf.invert();
+            self.inverted = !self.inverted;
+        }
+    }
+
+    fn reset_internals(&mut self) {
+        self.success = self.solved();
+        self.metrics.reset();
+        self.metrics_values = self.metrics.snapshot();
+        self.reward_value = if self.success { 1.0 } else { 0.0 };
+        self.inverted = false;
+        if self.track_solution {
+            self.solution_inv = Vec::new();
+            self.solution = Vec::new();
+        }
+    }
 }
 
 impl Env for Clifford {
@@ -188,38 +300,50 @@ impl Env for Clifford {
         // Expecting a flattened 2N x 2N boolean matrix encoded as i64s (>0 => true)
         self.cf.data = state.iter().map(|&x| x > 0).collect();
         self.depth = self.max_depth;
-        self.success = self.solved();
+        self.reset_internals();
     }
 
     fn reset(&mut self) {
         self.cf = CFState::new(self.cf.n);
-        self.depth = self.max_depth;
-        self.success = self.solved();
-
         let mut rng = rand::thread_rng();
         let action_range = Uniform::new(0, self.num_actions());
 
         for _ in 0..self.difficulty {
             let action = action_range.sample(&mut rng);
-            self.step(action);
+            if let Some(gate) = self.gateset.get(action).cloned() {
+                self.apply_gate_to_state(&gate);
+            }
         }
         self.depth = (self.depth_slope * self.difficulty).min(self.max_depth);
-        self.success = self.solved();
+        self.reset_internals();
     }
 
     fn step(&mut self, action: usize) {
-        match self.gateset[action] {
-            Gate::H(q)      => self.cf.h(q),
-            Gate::S(q)      => self.cf.s(q),
-            Gate::Sdg(q)    => self.cf.sdg(q),   // identical to S modulo global phase (ignored)
-            Gate::SX(q)     => self.cf.sx(q),
-            Gate::SXdg(q)   => self.cf.sxdg(q),  // identical to SX modulo global phase (ignored)
-            Gate::CX(c, t)  => self.cf.cx(c, t),
-            Gate::CZ(a, b)  => self.cf.cz(a, b),
-            Gate::SWAP(a,b) => self.cf.swap(a, b),
+        let mut penalty = 0.0f32;
+
+        if let Some(gate) = self.gateset.get(action).cloned() {
+            let previous = self.metrics_values.clone();
+            self.metrics.apply_gate(&gate);
+            let new_metrics = self.metrics.snapshot();
+            penalty = new_metrics.weighted_delta(&previous, &self.metrics_weights);
+            self.metrics_values = new_metrics;
+
+            self.apply_gate_to_state(&gate);
         }
+
+        if self.track_solution {
+            if self.inverted {
+                self.solution_inv.push(action);
+            } else {
+                self.solution.push(action);
+            }
+        }
+
         self.depth = self.depth.saturating_sub(1);
+        self.maybe_random_invert();
         self.success = self.solved();
+        let achieved = if self.success { 1.0 } else { 0.0 };
+        self.reward_value = achieved - penalty;
     }
 
     fn masks(&self) -> Vec<bool> {
@@ -228,14 +352,10 @@ impl Env for Clifford {
 
     fn is_final(&self) -> bool { self.depth == 0 || self.success }
 
-    fn reward(&self) -> f32 {
-        if self.success {
-            1.0
-        } else if self.depth == 0 {
-            -0.5
-        } else {
-            -0.5 / (self.max_depth as f32)
-        }
+    fn reward(&self) -> f32 { self.reward_value }
+
+    fn success(&self) -> bool {
+        self.success
     }
 
     fn observe(&self) -> Vec<usize> {
@@ -246,6 +366,19 @@ impl Env for Clifford {
             .filter_map(|(i, &v)| if v { Some(i) } else { None })
             .collect()
     }
+
+    fn twists(&self) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
+        (self.obs_perms.clone(), self.act_perms.clone())
+    }
+
+    fn track_solution(&self) -> bool { self.track_solution }
+
+    fn solution(&self) -> Vec<usize> {
+        let mut out = Vec::with_capacity(self.solution.len() + self.solution_inv.len());
+        out.extend_from_slice(&self.solution);
+        out.extend(self.solution_inv.iter().rev().copied());
+        out
+    }
 }
 
 #[pyclass(name="CliffordEnv", extends=PyBaseEnv)]
@@ -254,14 +387,40 @@ pub struct PyCliffordEnv;
 #[pymethods]
 impl PyCliffordEnv {
     #[new]
+    #[pyo3(signature = (
+        num_qubits,
+        difficulty,
+        gateset,
+        depth_slope,
+        max_depth,
+        metrics_weights=None,
+        add_inverts=None,
+        add_perms=None,
+        track_solution=None,
+    ))]
     pub fn new(
         num_qubits: usize,
         difficulty: usize,
         gateset: Vec<Gate>,
         depth_slope: usize,
-        max_depth: usize
+        max_depth: usize,
+        metrics_weights: Option<HashMap<String, f32>>,
+        add_inverts: Option<bool>,
+        add_perms: Option<bool>,
+        track_solution: Option<bool>,
     ) -> (Self, PyBaseEnv) {
-        let env = Clifford::new(num_qubits, difficulty, gateset, depth_slope, max_depth);
+        let weights = MetricsWeights::from_hashmap(metrics_weights);
+        let env = Clifford::new(
+            num_qubits,
+            difficulty,
+            gateset,
+            depth_slope,
+            max_depth,
+            weights,
+            add_inverts.unwrap_or(true),
+            add_perms.unwrap_or(true),
+            track_solution.unwrap_or(true),
+        );
         let env = Box::new(env);
         (PyCliffordEnv, PyBaseEnv { env })
     }

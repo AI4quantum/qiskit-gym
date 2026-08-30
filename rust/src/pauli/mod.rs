@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-/* 
+/*
 (C) Copyright 2025 IBM. All Rights Reserved.
 
 This code is licensed under the Apache License, Version 2.0. You may
@@ -11,11 +11,6 @@ copyright notice, and modified files need to carry a notice indicating
 that they have been altered from the originals.
 */
 
-pub mod clifford;
-pub mod linear_function;
 pub mod pauli;
-pub mod permutation;
-pub mod channel3;
-pub mod common;
-pub mod symmetry;
-pub mod metrics;
+pub mod pauli_dag;
+pub mod pauli_network;

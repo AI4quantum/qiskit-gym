@@ -17,7 +17,7 @@ import json
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from twisterl.utils import dynamic_import
+from twisterl.utils import dynamic_import, load_checkpoint
 from qiskit_gym.rl.configs import (
     AlphaZeroConfig,
     PPOConfig,
@@ -103,9 +103,7 @@ class RLSynthesis:
             act_perms=act_perms,
         )
         if model_path is not None:
-            model.load_state_dict(
-                torch.load(open(model_path, "rb"), map_location=torch.device("cpu"))
-            )
+            model.load_state_dict(load_checkpoint(model_path))
 
         return self.algorithm_cls(
             self.env._raw_env, model, self.rl_config.to_json(), None
@@ -125,10 +123,7 @@ class RLSynthesis:
             state, deterministic, num_searches, num_mcts_searches, C, max_expand_depth
         )
         if actions is not None:
-            return gate_list_to_circuit(
-                [self.env_config["gateset"][a] for a in actions],
-                num_qubits=self.env.config["num_qubits"],
-            )
+            return self.env.build_circuit_from_solution(actions, input)
 
     def learn(self, initial_difficulty=1, num_iterations=int(1e10), tb_path=None):
         if tb_path is not None:

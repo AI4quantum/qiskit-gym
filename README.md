@@ -29,12 +29,14 @@ Decompose linear Boolean functions into efficient quantum circuits using CNOT ga
 ### 🌊 **Clifford Synthesis**
 Generate optimal implementations of Clifford group elements with customizable gate sets.
 
+### 🎛️ **Pauli Network Synthesis**
+Optimize circuits containing Clifford gates and parametric rotations (RX, RY, RZ) for variational algorithms.
+
 ## 🔭 Roadmap and Vision
 There are lots of interesting quantum computing problems that can be addressed with RL. We hope to centralize the problem formulations here to make it easier for Quantum and AI researchers to collaborate in taclikng them.
 
 For future releases we plan to include envs for:
 
-- Pauli Network synthesis
 - Qubit routing
 - Clifford+T synthesis
 
@@ -86,6 +88,12 @@ import numpy as np
 random_permutation = np.random.permutation(9)
 optimized_circuit = rls.synth(random_permutation, num_searches=1000)
 ```
+
+## 🏅 Reward and Gate Penalties (at a glance)
+- Each step returns `reward = (1.0 if solved else 0.0) - penalty`.
+- `penalty` is the weighted increase in cost metrics after the chosen gate: CNOT count, CNOT layers, total layers, and total gates.
+- Default weights (`MetricsWeights`) are `n_cnots=0.01`, `n_layers_cnots=0.0`, `n_layers=0.0`, `n_gates=0.0001`; configure per env via `metrics_weights`.
+- Metrics accumulate over the episode; once the target is solved, the positive reward is offset by the penalties from any extra cost incurred.
 
 ## 🤝 Contributing
 
