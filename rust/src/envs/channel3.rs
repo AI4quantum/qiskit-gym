@@ -523,6 +523,10 @@ impl Env for Channel3 {
         }
     }
 
+    fn success(&self) -> bool {
+        self.success
+    }
+
     fn observe(&self,) -> Vec<usize> {
         let (ch_dir, ch_inv) = if self.canonical_obs {
             (&self.ch.canonical().data, &self.ch.adjoint().canonical().data)
@@ -539,7 +543,23 @@ impl Env for Channel3 {
     }
 }
 
+/////////////////////////
+use pyo3::exceptions::PyRuntimeError;
 
+fn channel3_ref(base: &PyBaseEnv) -> PyResult<&Channel3> {
+    base.env
+        .as_any()
+        .downcast_ref::<Channel3>()
+        .ok_or_else(|| PyRuntimeError::new_err("expected Channel3 environment"))
+}
+
+fn channel3_mut(base: &mut PyBaseEnv) -> PyResult<&mut Channel3> {
+    base.env
+        .as_any_mut()
+        .downcast_mut::<Channel3>()
+        .ok_or_else(|| PyRuntimeError::new_err("expected Channel3 environment"))
+}
+/////////////////////////
 
 #[pyclass(name="Channel3Env", extends=PyBaseEnv)]
 pub struct PyChannel3Env;
@@ -560,5 +580,44 @@ impl PyChannel3Env {
         let env = Channel3::new(num_qubits, difficulty, actions, depth_slope, max_obs_depth, max_steps, use_mask, canonical_obs);
         let env = Box::new(env);
         (PyChannel3Env, PyBaseEnv { env })
+    }
+
+    fn get_state(slf: PyRef<'_, Self>) -> PyResult<Vec<i128>> {
+        let base = slf.into_super();
+        Ok(channel3_ref(&base)?.get_state())
+    }
+
+    fn get_canonical_state(
+        slf: PyRef<'_, Self>,
+    ) -> PyResult<Vec<i128>> {
+        let base = slf.into_super();
+        Ok(channel3_ref(&base)?.get_canonical_state())
+    }
+
+    fn set_state_from_actions(
+        slf: PyRefMut<'_, Self>,
+        actions: Vec<i128>,
+    ) -> PyResult<()> {
+        let mut base = slf.into_super();
+        channel3_mut(&mut base)?.set_state_from_actions(actions);
+        Ok(())
+    }
+
+    fn set_max_steps(
+        slf: PyRefMut<'_, Self>,
+        max_steps: usize,
+    ) -> PyResult<()> {
+        let mut base = slf.into_super();
+        channel3_mut(&mut base)?.set_max_steps(max_steps);
+        Ok(())
+    }
+
+    fn prev(
+        slf: PyRefMut<'_, Self>,
+        action: usize,
+    ) -> PyResult<()> {
+        let mut base = slf.into_super();
+        channel3_mut(&mut base)?.prev(action);
+        Ok(())
     }
 }
